@@ -181,6 +181,11 @@ function teaserText(q: string): string {
 		// 0 & 1 endpmatrix" on the phone fold bar): name them instead.
 		.replace(/\\begin\{[pbvV]?matrix\}[\s\S]*?\\end\{[pbvV]?matrix\}/g, "[matrix]")
 		.replace(/\\\\/g, " ")
+		// Markdown emphasis and blockquote markers are noise in a one-line
+		// teaser ("> « Il **faisait** nuit"); the blanks (___) stay.
+		.replace(/^\s*>\s?/gm, "")
+		.replace(/\*\*([^*]+)\*\*/g, "$1")
+		.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
 		.replace(/\\\(([\s\S]*?)\\\)/g, "$1") // \(...\) inline math
 		.replace(/\\\[([\s\S]*?)\\\]/g, "$1") // \[...\] display math
 		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // standard $...$/$$...$$ math
