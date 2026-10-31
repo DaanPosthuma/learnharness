@@ -622,3 +622,41 @@ body {
 		padding-bottom: env(safe-area-inset-bottom);
 	}
 }
+
+/* Touch devices (mobile wave): keyboard-shortcut hints mean nothing without
+   a hardware keyboard; taps should not flash or wait for a double-tap. */
+@media (hover: none) and (pointer: coarse) {
+	.lh-hide-touch {
+		display: none;
+	}
+}
+button,
+[role="button"],
+a,
+input,
+textarea,
+select {
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+}
+
+/* Notched phones in standalone (home-screen) mode: the status bar is
+   translucent and the page runs under it (viewport-fit=cover), so the top
+   chrome and the bottom docks step inside the safe area. Zero everywhere
+   else. */
+.lh-top-bar {
+	height: calc(3.75rem + env(safe-area-inset-top));
+	padding-top: env(safe-area-inset-top);
+}
+.lh-safe-top {
+	padding-top: calc(0.5rem + env(safe-area-inset-top));
+}
+.lh-safe-top-2 {
+	top: calc(0.5rem + env(safe-area-inset-top));
+}
+.lh-safe-bottom {
+	padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+}
+.lh-safe-bottom-0 {
+	padding-bottom: env(safe-area-inset-bottom);
+}

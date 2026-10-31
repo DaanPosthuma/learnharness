@@ -292,7 +292,7 @@ async function handle(req, res) {
 	}
 
 	if (p === "/login") {
-		if (req.method === "GET") {
+		if (req.method === "GET" || req.method === "HEAD") {
 			if (currentUser(req)) return redirect(res, safeNext(url.searchParams.get("next")));
 			return send(res, 200, loginPage({ next: safeNext(url.searchParams.get("next")) }));
 		}
