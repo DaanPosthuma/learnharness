@@ -58,6 +58,12 @@ phone ── https ── Caddy ── gateway :8080 ──┬── next start 
   answer 401, e.g. dictation without a Deepgram key).
 - Each user adds their **own provider keys** in Settings, exactly as on the
   desktop app. Keys are never shared between accounts.
+- A process idle for `LH_IDLE_MINUTES` is stopped and forgotten at once, so
+  the next request starts a fresh one. Next.js answers SIGTERM by closing its
+  listener and waiting for open connections (a browser tab's event stream
+  never closes), so the gateway follows up with SIGKILL after 15 s. Before
+  this (2026-10-31) a lingering process kept its table entry and every
+  request got "The app is not reachable right now".
 
 The gateway is zero-dependency Node and has tests (`tests/gateway-lib.test.ts`).
 

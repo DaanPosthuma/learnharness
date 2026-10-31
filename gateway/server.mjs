@@ -49,6 +49,8 @@ const COOKIE = "lh_session";
 const COOKIE_SECURE = process.env.LH_COOKIE_SECURE ?? "auto";
 const NEXT_BIN = path.join(APP_DIR, "node_modules", "next", "dist", "bin", "next");
 const START_TIMEOUT_MS = 90_000;
+// After SIGTERM, how long a user process may linger before SIGKILL.
+const STOP_GRACE_MS = 15_000;
 
 mkdirSync(HOME, { recursive: true });
 const SECRET = loadOrCreateSecret(HOME);
@@ -56,7 +58,7 @@ const log = (...a) => console.log(new Date().toISOString(), "[gateway]", ...a);
 
 // ------------------------------------------------------------ user processes
 
-/** name → { port, proc, ready: Promise<void>, lastSeen } */
+/** name → { port, proc, ready: Promise<void>, lastSeen, stopping } */
 const upstreams = new Map();
 const usedPorts = new Set();
 
@@ -107,8 +109,8 @@ function ensureUpstream(name) {
 	const prefix = (chunk) => chunk.toString().split("\n").filter(Boolean).map((l) => `[${name}] ${l}`).join("\n");
 	proc.stdout.on("data", (c) => console.log(prefix(c)));
 	proc.stderr.on("data", (c) => console.error(prefix(c)));
-	const entry = { port, proc, lastSeen: Date.now(), ready: waitForPort(port, Date.now() + START_TIMEOUT_MS) };
-	entry.ready.catch((err) => { log(`${name}: ${err.message}`); proc.kill("SIGTERM"); });
+	const entry = { port, proc, lastSeen: Date.now(), stopping: false, ready: waitForPort(port, Date.now() + START_TIMEOUT_MS) };
+	entry.ready.catch((err) => stopUpstream(name, entry, err.message));
 	proc.on("exit", (code, signal) => {
 		log(`app for ${name} exited (${signal ?? code})`);
 		if (upstreams.get(name) === entry) upstreams.delete(name);
@@ -118,16 +120,39 @@ function ensureUpstream(name) {
 	return entry;
 }
 
+/**
+ * Stop a user's process and forget it AT ONCE, so the next request starts a
+ * fresh one on a free port (the old port stays reserved until the process
+ * really exits). Next.js answers SIGTERM by closing its listener and then
+ * waiting for open connections to drain — and a browser tab's EventSource
+ * never drains. Seen live 2026-10-31: the "stopped" process lingered for an
+ * hour, the gateway kept its table entry and proxied every request into a
+ * closed port (ECONNREFUSED → "The app is not reachable right now").
+ */
+function stopUpstream(name, entry, why) {
+	if (upstreams.get(name) === entry) upstreams.delete(name);
+	if (entry.stopping) return;
+	entry.stopping = true;
+	log(`stopping app for ${name} (${why})`);
+	entry.proc.kill("SIGTERM");
+	setTimeout(() => {
+		if (entry.proc.exitCode === null && entry.proc.signalCode === null) {
+			log(`app for ${name} did not exit after SIGTERM; killing`);
+			entry.proc.kill("SIGKILL");
+		}
+	}, STOP_GRACE_MS).unref();
+}
+
 setInterval(() => {
 	const now = Date.now();
 	for (const [name, u] of upstreams) {
-		if (now - u.lastSeen > IDLE_MS) { log(`stopping idle app for ${name}`); u.proc.kill("SIGTERM"); }
+		if (now - u.lastSeen > IDLE_MS) stopUpstream(name, u, "idle");
 	}
 }, 60_000).unref();
 
 function shutdown() {
 	log("shutting down");
-	for (const u of upstreams.values()) u.proc.kill("SIGTERM");
+	for (const [name, u] of upstreams) stopUpstream(name, u, "shutdown");
 	server.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 5000).unref();
 }
@@ -364,7 +389,7 @@ async function handle(req, res) {
 	proxy(req, res, up, user);
 }
 
-function proxy(req, res, up, user) {
+function proxy(req, res, up, user, retry = true) {
 	const headers = { ...req.headers };
 	delete headers.cookie; // the app never needs the gateway session
 	headers["x-lh-user"] = user.name;
@@ -376,14 +401,26 @@ function proxy(req, res, up, user) {
 		// SSE and streams: pipe as it comes, nothing buffered.
 		inc.pipe(res);
 	});
-	out.on("error", (err) => {
+	out.on("error", async (err) => {
 		log(`proxy error for ${user.name}: ${err.message}`);
-		if (!res.headersSent) send(res, 502, "The app is not reachable right now.", "text/plain");
-		else res.destroy();
+		if (res.headersSent) return res.destroy();
+		if (err.code === "ECONNREFUSED") {
+			// Nothing listens on that port: the process is gone or draining.
+			// Drop it and, for a bodiless request, try once more on a fresh one.
+			stopUpstream(user.name, up, err.code);
+			if (retry && (req.method === "GET" || req.method === "HEAD")) {
+				const fresh = ensureUpstream(user.name);
+				try { await fresh.ready; } catch { return send(res, 503, "The app did not start. Try again in a moment.", "text/plain"); }
+				return proxy(req, res, fresh, user, false);
+			}
+		}
+		send(res, 502, "The app is not reachable right now. Reload to try again.", "text/plain");
 	});
 	req.on("aborted", () => out.destroy());
 	res.on("close", () => { up.lastSeen = Date.now(); });
-	req.pipe(out);
+	// A retried request has already been read to its end: piping it again
+	// would never call end() and the upstream request would never be sent.
+	if (req.readableEnded) out.end(); else req.pipe(out);
 }
 
 const server = http.createServer((req, res) => {
