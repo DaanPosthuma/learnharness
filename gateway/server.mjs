@@ -246,6 +246,33 @@ ${ok ? `<div class="ok">${escapeHtml(ok)}</div>` : ""}
 <div class="row"><a href="/">← Back to the app</a><form method="post" action="/logout" style="margin:0"><button type="submit" style="width:auto;height:32px;margin:0;padding:0 12px;background:transparent;color:#8d8d8d">Sign out</button></form></div>`);
 }
 
+// ------------------------------------------------------------- public assets
+
+/** Files served to anyone, straight from disk: the browser fetches the web
+ *  manifest WITHOUT cookies (credentials: omit), and the service worker and
+ *  icons must load before sign-in for the install prompt to work. None of
+ *  these carry user data. Everything else needs a session and a process. */
+const PUBLIC_DIR = path.join(APP_DIR, "public");
+const PUBLIC_EXACT = new Set(["/manifest.webmanifest", "/sw.js", "/favicon.ico"]);
+const PUBLIC_TYPES = { ".webmanifest": "application/manifest+json", ".js": "text/javascript; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon", ".svg": "image/svg+xml" };
+
+function publicFile(p) {
+	if (!(PUBLIC_EXACT.has(p) || p.startsWith("/icons/"))) return null;
+	const file = path.resolve(PUBLIC_DIR, "." + p);
+	if (!file.startsWith(PUBLIC_DIR + path.sep)) return null; // no traversal
+	return existsSync(file) ? file : null;
+}
+
+async function servePublic(res, file) {
+	const { readFile } = await import("node:fs/promises");
+	const body = await readFile(file);
+	const type = PUBLIC_TYPES[path.extname(file)] ?? "application/octet-stream";
+	// The worker script must never be cached by the browser's HTTP cache.
+	const cache = file.endsWith("sw.js") ? "no-cache" : "public, max-age=3600";
+	res.writeHead(200, { "Content-Type": type, "Content-Length": body.length, "Cache-Control": cache });
+	res.end(body);
+}
+
 // -------------------------------------------------------------------- routing
 
 function currentUser(req) {
@@ -258,6 +285,11 @@ async function handle(req, res) {
 	const p = url.pathname;
 
 	if (p === "/gateway/health") return send(res, 200, JSON.stringify({ ok: true, users: upstreams.size }), "application/json");
+
+	if (req.method === "GET" || req.method === "HEAD") {
+		const file = publicFile(p);
+		if (file) return servePublic(res, file);
+	}
 
 	if (p === "/login") {
 		if (req.method === "GET") {
@@ -292,7 +324,10 @@ async function handle(req, res) {
 	const user = currentUser(req);
 	if (!user) {
 		if (p.startsWith("/api/") || p.startsWith("/gateway/") || !wantsHtml(req)) {
-			return send(res, 401, JSON.stringify({ error: "Sign in required", login: "/login" }), "application/json");
+			// The header is what the service worker keys on: the app's own
+			// routes also answer 401 (a missing Deepgram key, say) and those
+			// must not bounce the page to the sign-in screen.
+			return send(res, 401, JSON.stringify({ error: "Sign in required", login: "/login" }), "application/json", { "x-lh-gateway": "unauthorized" });
 		}
 		return redirect(res, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
 	}

@@ -19,6 +19,7 @@
  * cache from an older version.
  */
 const VERSION = "v1";
+const BUILD = "2026-10-31"; // bump to force a worker update on devices
 const STATIC = `lh-static-${VERSION}`;
 const PAGES = `lh-pages-${VERSION}`;
 const API = `lh-api-${VERSION}`;
@@ -84,10 +85,17 @@ function withTimeout(promise, ms) {
 	});
 }
 
-/** Marks a cached response so the UI can tell a saved copy from live data. */
+/** Re-wraps a cached response for delivery: marks it as a saved copy and
+ *  drops the transport-encoding headers. The Cache API stores the DECODED
+ *  body but keeps the server's Content-Encoding/Content-Length; handing a
+ *  cached Response object straight to a navigation makes Chrome try to
+ *  decode plain bytes as gzip and show "This page couldn't load". A
+ *  synthetic Response with clean headers renders. */
 function stamped(res) {
 	const headers = new Headers(res.headers);
 	headers.set("x-lh-from-cache", "1");
+	headers.delete("content-encoding");
+	headers.delete("content-length");
 	return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
@@ -100,7 +108,9 @@ async function networkFirst(request, cacheName, { navigate } = {}) {
 	const cache = await caches.open(cacheName);
 	try {
 		const res = await withTimeout(fetch(request), NETWORK_TIMEOUT_MS);
-		if (res.status === 401 && !navigate) void notifyUnauthorized();
+		// Only the GATEWAY's 401 means "sign in again"; the app's own routes
+		// use 401 too (e.g. a missing dictation key) and must not bounce.
+		if (res.status === 401 && !navigate && res.headers.get("x-lh-gateway") === "unauthorized") void notifyUnauthorized();
 		// Cache only clean successes. Redirected responses (the gateway's
 		// login bounce) must never shadow a real page.
 		if (res.ok && !res.redirected && res.type === "basic") void cache.put(request, res.clone());
@@ -109,8 +119,8 @@ async function networkFirst(request, cacheName, { navigate } = {}) {
 		const hit = await cache.match(request);
 		if (hit) return stamped(hit);
 		if (navigate && request.mode === "navigate") {
-			const offline = await cache.match("/offline");
-			if (offline) return offline;
+			const offline = await cache.match("/offline", { ignoreVary: true });
+			if (offline) return stamped(offline);
 		}
 		throw err;
 	}
@@ -139,7 +149,7 @@ self.addEventListener("fetch", (event) => {
 		if (request.mode === "navigate") {
 			const cache = await caches.open(PAGES);
 			const offline = await cache.match("/offline", { ignoreVary: true });
-			return offline ?? inlineOffline(err && err.message);
+			return offline ? stamped(offline) : inlineOffline(err && err.message);
 		}
 		throw err;
 	}));
