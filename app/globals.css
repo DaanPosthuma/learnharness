@@ -598,3 +598,27 @@ body {
 	outline: 1px solid var(--border);
 	border-radius: 0.25rem;
 }
+
+/* ---------------------------------------------------------------------------
+   MOBILE (mobile wave, 2026-10-31): phone-width rules. The sidebar becomes a
+   drawer (components/sidebar.tsx); these rules handle what CSS owns —
+   notched-phone safe areas and iOS form zoom.
+   --------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+	/* iOS Safari zooms the page when a focused control renders text below
+	   16px. Every input/textarea reads at the 16px rung on phones. */
+	input,
+	textarea,
+	select {
+		font-size: 16px !important;
+	}
+	/* Edge-to-edge viewport (viewport-fit=cover): keep the drawer and the
+	   bottom dock clear of the notch, home indicator and rounded corners. */
+	aside.sidebar-motion > div {
+		padding-top: env(safe-area-inset-top);
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+	.lh-mobile-safe-bottom {
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+}

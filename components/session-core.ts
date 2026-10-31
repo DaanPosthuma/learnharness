@@ -42,12 +42,82 @@ export const TURN_POLL_MS = 500;
 /** Give up waiting (a wake turn can run long) and surface the 409. */
 export const TURN_WAIT_MAX_MS = 30_000;
 
+// ---------------------------------------------------------------------------
+// OFFLINE OUTBOX (mobile wave, 2026-10-31). The teacher cannot answer without
+// a network, but a learner on the underground can still TYPE. A send made
+// with no connection waits for `online` instead of failing; its optimistic
+// card stays, the queued line explains, and a localStorage copy survives a
+// reload (or the phone sleeping in a tunnel) — restoreOutbox() replays it.
+// The POST itself is a ~100ms ack (connection diet B), so a wait here holds
+// no server resource; a reachability failure while the browser still
+// claims to be online retries with backoff for a bounded time.
+// ---------------------------------------------------------------------------
+
+/** Retry schedule when the browser claims to be online but the POST failed
+ *  at the network level. EMPTY by default: the browser's own offline signal
+ *  is the outbox's trigger (that wait is unbounded); a failure while
+ *  "online" keeps the long-standing contract — the banner, and Retry is the
+ *  learner's. Injectable for tests and for hosts that want a few retries. */
+const UNREACHABLE_RETRY_MS: readonly number[] = [];
+const OUTBOX_PREFIX = "lh:outbox:";
+/** Chats with a model currently waiting to POST (module scope, per tab): a
+ *  remount of the same chat must not replay the durable copy on top of a
+ *  wait that is still alive in a detached model — that would send twice. */
+const waitingChats = new Set<string>();
+
+export function outboxKey(chatId: string): string {
+	return `${OUTBOX_PREFIX}${chatId}`;
+}
+
+export function readOutbox(chatId: string): ChatInput | null {
+	try {
+		const raw = globalThis.localStorage?.getItem(outboxKey(chatId));
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as { input?: ChatInput } | null;
+		return parsed?.input ?? null;
+	} catch {
+		return null;
+	}
+}
+
+export function writeOutbox(chatId: string, input: ChatInput | null): void {
+	try {
+		if (input === null) globalThis.localStorage?.removeItem(outboxKey(chatId));
+		else globalThis.localStorage?.setItem(outboxKey(chatId), JSON.stringify({ input, at: Date.now() }));
+	} catch { /* storage unavailable: the in-memory wait still works */ }
+}
+
+function isOffline(): boolean {
+	return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/** fetch() rejects with a TypeError for every network-level failure. */
+function isNetworkError(err: unknown): boolean {
+	return err instanceof TypeError;
+}
+
+function waitForOnline(signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (!isOffline()) { resolve(); return; }
+		const cleanup = () => {
+			window.removeEventListener("online", done);
+			signal?.removeEventListener("abort", abort);
+		};
+		const done = () => { cleanup(); resolve(); };
+		const abort = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
+		window.addEventListener("online", done);
+		signal?.addEventListener("abort", abort);
+	});
+}
+
 export interface SessionModelDeps {
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch?: typeof globalThis.fetch;
 	/** Injectable retry timing (tests). */
 	pollMs?: number;
 	waitMaxMs?: number;
+	/** Offline outbox: the online-but-unreachable retry schedule (tests). */
+	unreachableRetryMs?: readonly number[];
 }
 
 /** A local optimistic id (never a server stamp — absorption and the
@@ -191,6 +261,9 @@ export interface SessionState {
 	 *  the messages (the drain's verbatim events upsert the real card) —
 	 *  visibleQueuedSteers is the pure fold. */
 	steerQueue: SteerQueueItem[];
+	/** Offline outbox (mobile wave): an input is waiting for the network;
+	 *  its optimistic card is showing and the queued line explains. */
+	offlineQueued: boolean;
 }
 
 /** One queued composer steer: the client-minted id (the upsert key) + text. */
@@ -229,8 +302,11 @@ export class SessionModel {
 	fetch: typeof globalThis.fetch;
 	/** Steers sent but not yet drained (the queued indicator's truth). */
 	private steerQueueValue: SteerQueueItem[] = [];
+	/** Offline outbox (mobile wave): true while a POST waits for the network. */
+	private offlineQueued = false;
 	private readonly pollMs: number;
 	private readonly waitMaxMs: number;
+	private readonly unreachableRetryMs: readonly number[];
 	private onReattachSettled?: () => void;
 	/** The hook's re-render trigger (set by the adapter). */
 	onChange?: () => void;
@@ -277,6 +353,7 @@ export class SessionModel {
 		this.fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
 		this.pollMs = opts.pollMs ?? TURN_POLL_MS;
 		this.waitMaxMs = opts.waitMaxMs ?? TURN_WAIT_MAX_MS;
+		this.unreachableRetryMs = opts.unreachableRetryMs ?? UNREACHABLE_RETRY_MS;
 		this.onChange = opts.onChange;
 		this.onReattachSettled = opts.onReattachSettled;
 	}
@@ -309,6 +386,7 @@ export class SessionModel {
 			status: this.statusValue,
 			error: this.errorValue ?? providerError,
 			steerQueue: this.steerQueueValue,
+			offlineQueued: this.offlineQueued,
 		};
 	}
 
@@ -335,6 +413,67 @@ export class SessionModel {
 		this.onChange?.();
 	}
 
+	/** Offline outbox: flip the queued flag (+ the durable copy) and notify. */
+	private markQueued(input: ChatInput, queued: boolean): void {
+		writeOutbox(this.chatId, queued ? input : null);
+		if (queued) waitingChats.add(this.chatId); else waitingChats.delete(this.chatId);
+		if (this.offlineQueued === queued) return;
+		this.mutate(() => { this.offlineQueued = queued; });
+	}
+
+	/** Drops the durable copy once the server has answered (either way). */
+	private clearOutbox(input: ChatInput): void {
+		this.markQueued(input, false);
+	}
+
+	/** The POST, waiting for the network instead of failing (see OFFLINE
+	 *  OUTBOX above). Offline waits are unbounded — the signal cancels;
+	 *  online-but-unreachable retries for UNREACHABLE_MAX_MS, then throws
+	 *  the original network error so the banner can show it. */
+	private async fetchWhenReachable(input: ChatInput, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+		let attempt = 0;
+		for (;;) {
+			if (isOffline()) {
+				this.markQueued(input, true);
+				await waitForOnline(signal);
+				attempt = 0;
+			}
+			try {
+				const res = await this.fetch("/api/chat", init);
+				this.markQueued(input, false);
+				return res;
+			} catch (err) {
+				if (signal?.aborted || !isNetworkError(err)) throw err;
+				if (isOffline()) { this.markQueued(input, true); continue; } // the browser noticed too: wait for `online`
+				const wait = this.unreachableRetryMs[attempt++];
+				if (wait === undefined) {
+					this.markQueued(input, false);
+					throw err; // the banner shows it; Retry is the learner's
+				}
+				this.markQueued(input, true);
+				await delay(wait, signal);
+			}
+		}
+	}
+
+	/** Mount-time replay of the durable outbox: an input queued offline on
+	 *  a page that was since reloaded. Text/thinking/next inputs are sent as
+	 *  new turns; an answer only while its question is still the pending
+	 *  one (otherwise it landed, or the dock moved on); continue/retry are
+	 *  dropped — they described a moment that has passed. */
+	restoreOutbox(): void {
+		if (waitingChats.has(this.chatId)) return; // a detached model still owns the wait
+		const input = readOutbox(this.chatId);
+		if (!input) return;
+		if (input.type === "continue" || input.type === "retry") { writeOutbox(this.chatId, null); return; }
+		if (input.type === "answer") {
+			const pending = pendingQuestionOf([...this.base, ...this.tail]);
+			if (pending?.toolCallId !== input.toolCallId) { writeOutbox(this.chatId, null); return; }
+		}
+		if (!this.readyRef) return;
+		void this.send(input);
+	}
+
 	/** The 409 identity-retry fetch (the Wave B contract): the event was
 	 *  never persisted (write-ahead happens only on acceptance), so the
 	 *  retry waits out the running turn and re-POSTs the SAME body. */
@@ -346,7 +485,7 @@ export class SessionModel {
 			body,
 			signal,
 		};
-		let response = await this.fetch("/api/chat", init);
+		let response = await this.fetchWhenReachable(input, init, signal);
 		let waited = 0;
 		while (response.status === 409) {
 			await response.body?.cancel().catch(() => {});
@@ -744,6 +883,7 @@ export class SessionModel {
 				throw new Error(message);
 			}
 			accepted = true;
+			this.clearOutbox(input);
 			// Opening-message handover ends at acceptance, not stream completion.
 			onAccepted?.();
 			// CONNECTION DIET B (owner, 2026-10-10 — parallel-session freeze
@@ -761,6 +901,8 @@ export class SessionModel {
 			await this.resumeStream(true);
 			return true;
 		} catch (err) {
+			// A refused or failed POST is answered by the banner, not replayed.
+			this.clearOutbox(input);
 			const failedOpening = input.type === "text" && onAccepted !== undefined && !accepted;
 			if (failedOpening) {
 				// The POST outlives stop(), including StrictMode's cleanup. Remove

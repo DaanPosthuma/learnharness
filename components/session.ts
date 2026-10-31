@@ -68,6 +68,9 @@ export function useChatSession({ chatId, initialMessages, initialError, initiall
 	// costs nothing: navigating back replays the compacted log + live tail.
 	useEffect(() => {
 		if (initiallyInFlight) void model.resumeStream(false);
+		// Offline outbox (mobile wave): a reload with a queued input replays
+		// it (idle sessions only — a running turn owns the dock).
+		else model.restoreOutbox();
 		return () => {
 			model.stop();
 		};
@@ -134,6 +137,7 @@ export function useChatSession({ chatId, initialMessages, initialError, initiall
 		status: state.status,
 		error: state.error,
 		steerQueue: state.steerQueue,
+		offlineQueued: state.offlineQueued,
 		send,
 		continueIfOwed,
 		steer,

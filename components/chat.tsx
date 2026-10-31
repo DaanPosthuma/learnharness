@@ -255,7 +255,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, hasConfirmedConversation, contextTokens, send, continueIfOwed, steer, steerQueue, submitAnswer, dismissQuestion, dismissProblem, questionDraft, saveQuestionDraft, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, hasConfirmedConversation, contextTokens, send, continueIfOwed, steer, steerQueue, offlineQueued, submitAnswer, dismissQuestion, dismissProblem, questionDraft, saveQuestionDraft, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initialError, initiallyInFlight });
 
 	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
@@ -1699,7 +1699,12 @@ export function Chat({
 					onReserve={setDockReserve}
 					dictationSlot={<DictationBar dictation={dictation} />}
 					dictationCancel={dictation.cancel}
-					queuedSteers={visibleQueuedSteers(steerQueue, nativeMessages)}
+					queuedSteers={[
+						// Offline outbox (mobile wave): the waiting send rides the
+						// same quiet line as a queued steer — no new chrome.
+						...(offlineQueued ? [{ id: "__offline-outbox", text: "Waiting for a connection — sends automatically" }] : []),
+						...visibleQueuedSteers(steerQueue, nativeMessages),
+					]}
 					setupCta={
 						zeroKeys ? (
 							<ZeroKeysPill onOpen={() => setSetupOpen(true)} />

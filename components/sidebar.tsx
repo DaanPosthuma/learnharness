@@ -84,9 +84,15 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+/** Below this width the sidebar is a drawer over the content (mobile wave):
+ *  phones cannot afford 288px of inline chrome. Matches Tailwind's `md`. */
+const MOBILE_QUERY = "(max-width: 767px)";
+
+const SidebarContext = createContext<{ open: boolean; toggle: () => void; mobile: boolean; close: () => void }>({
 	open: false,
 	toggle: () => {},
+	mobile: false,
+	close: () => {},
 });
 
 export function useSidebar() {
@@ -106,6 +112,20 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
+	// Phone-width = drawer mode (mobile wave): the sidebar overlays the
+	// content and starts CLOSED regardless of the desktop preference; the
+	// stored preference is neither read nor written while mobile, so a
+	// phone session never flips the desktop's choice.
+	const [mobile, setMobile] = useState(false);
+	const [mobileOpen, setMobileOpen] = useState(false);
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return; // test DOMs
+		const mq = window.matchMedia(MOBILE_QUERY);
+		const apply = () => setMobile(mq.matches);
+		apply();
+		mq.addEventListener("change", apply);
+		return () => mq.removeEventListener("change", apply);
+	}, []);
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -147,7 +167,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		return () => window.removeEventListener("resize", onResize);
 	}, []);
 
+	const close = useCallback(() => setMobileOpen(false), []);
+
 	const toggle = useCallback(() => {
+		// Drawer mode: a plain flip, no persistence (see the mobile note).
+		if (mobile) {
+			setMobileOpen((v) => !v);
+			return;
+		}
 		// Opening while narrow (auto-closed, or the user's own closed-at-
 		// narrow): ask the shell to widen to the threshold — the resize
 		// listener flips `narrow` and the sidebar appears. The preference
@@ -163,7 +190,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [mobile, narrow, open]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -179,7 +206,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: mobile ? mobileOpen : open && !narrow, toggle, mobile, close }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
@@ -390,7 +417,7 @@ export type SessionKindFilter = "teach" | "all" | "practice";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
-	const { open, toggle } = useSidebar();
+	const { open, toggle, mobile, close } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -405,6 +432,12 @@ function SessionsSidebar() {
 	const pathname = usePathname();
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
+
+	// Drawer mode (mobile wave): picking a session navigates, and the
+	// drawer must get out of the way of the page it just opened.
+	useEffect(() => {
+		if (mobile) close();
+	}, [pathname, mobile, close]);
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
 	   sessionless draft view; the session is created only when the first
@@ -646,8 +679,25 @@ function SessionsSidebar() {
 	}, [open, pathname, refresh]);
 
 	return (
+		<>
+		{/* Drawer backdrop (mobile wave): tap outside to close. Only exists in
+		    drawer mode — inline mode keeps the owner's no-modal rule. */}
+		{mobile && open && (
+			<div
+				className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[1px] md:hidden"
+				aria-hidden="true"
+				onClick={close}
+			/>
+		)}
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			className={cn(
+				"sidebar-motion shrink-0 overflow-hidden duration-200",
+				mobile
+					// Drawer: fixed over the content, slid in/out; the content
+					// never shrinks around it on a phone.
+					? cn("fixed inset-y-0 left-0 z-50 w-72 transition-transform", open ? "translate-x-0" : "-translate-x-full")
+					: open ? "w-72" : "w-0",
+			)}
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
@@ -939,6 +989,7 @@ function SessionsSidebar() {
 					onDeleted={onDeleted}
 				/>
 			</aside>
+		</>
 	);
 }
 
