@@ -108,6 +108,52 @@ Sizing: the gateway idles at ~50 MB; each active user's Next.js process
 takes 250–400 MB and is stopped after `LH_IDLE_MINUTES` without requests. A
 2 GB box with swap comfortably runs two or three people learning at once.
 
+## What the iPhone-width pass changed (2026-10-31)
+
+Three rounds of using the live app at 390×844 and fixing what hurt:
+
+- Settings is full-screen on phones with a horizontal section strip; the
+  desktop two-column card squeezed its content into ~130px.
+- The sidebar footer shows the signed-in account with change-password and
+  sign-out; before, nothing in the app said who was signed in.
+- The stats summary and the per-session model pills no longer wrap. On
+  phones the two pills (a rare desktop adjustment) sit behind one sliders
+  button.
+- The knowledge-graph controls shrink to icons on phones so the search box
+  no longer covers the menu button.
+- Keyboard-chord hints are hidden on touch devices; tap highlight is off
+  and controls use `touch-action: manipulation`.
+- Safe-area insets on the top bar, home header, floating graph controls and
+  both bottom docks for notched iPhones in standalone mode.
+- The folded "Check your understanding" bar shows a readable teaser instead
+  of LaTeX/markdown source.
+- The plan and graph canvases say "pinch or use the buttons" on touch.
+
+Known and left alone: the graph's initial fit can leave a cluster partly
+off-screen in portrait (drag or pinch to see it); markdown tables scroll
+horizontally; the learner's confidence slider defaults to 50% and the
+teacher notices when it never moves.
+
+## Building the image on the server (fallback)
+
+When the laptop cannot build (Docker Desktop down), build on the box. A
+`t3a.small` runs out of memory in `next build`, so resize for the build:
+
+```bash
+export AWS_PROFILE=… AWS_REGION=eu-west-2 ID=i-…
+aws ec2 stop-instances --instance-ids $ID && aws ec2 wait instance-stopped --instance-ids $ID
+aws ec2 modify-instance-attribute --instance-id $ID --instance-type '{"Value":"t3a.large"}'
+aws ec2 start-instances --instance-ids $ID && aws ec2 wait instance-running --instance-ids $ID
+deploy/aws-launch.sh run 'dnf install -y -q git; git clone -b mobile-pwa https://github.com/<you>/learnharness /opt/learnharness-src || (cd /opt/learnharness-src && git pull)'
+deploy/aws-launch.sh run 'cd /opt/learnharness-src && docker build -t <account>.dkr.ecr.<region>.amazonaws.com/learnharness-web:latest . && cd /opt/learnharness && docker compose up -d'
+# then resize back the same way with {"Value":"t3a.small"}
+```
+
+The image carries the ECR tag so `docker compose up -d` uses it without a
+pull. Note that `lh-update` pulls from ECR and would replace a server-built
+image with whatever was last pushed; push from a working machine when you
+can (`deploy/aws-launch.sh push`).
+
 ## Installing on a phone
 
 - **iPhone:** open the site in Safari → Share → *Add to Home Screen*. iOS
