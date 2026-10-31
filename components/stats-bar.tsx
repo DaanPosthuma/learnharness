@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { CLAUDE_CODE_PROVIDER, subscriptionLabels, subscriptionLabel, type cliContextWindowOf, type SessionPricing, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, planCostLabel, prettyModel } from "@/components/usage-format";
 import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model-picker";
+import { SlidersHorizontalIcon } from "lucide-react";
 
 export function formatContextMeasurement(tokens: number | null, limit: number | null): string {
 	const numerator = tokens === null ? "?" : formatTokens(tokens);
@@ -112,6 +113,9 @@ export function StatsBar({
 	const cliBilled = turns.some((turn) => turn.model.startsWith(`${CLAUDE_CODE_PROVIDER}:`));
 	const costLabel = planCostLabel(pricedCount > 0 ? cost : null, cliBilled ? [...providers, "CLI"] : providers);
 
+	// Phone-only reveal of the model/thinking pills (mobile wave).
+	const [showModels, setShowModels] = useState(false);
+
 	return (
 		<div
 			data-testid="stats-bar"
@@ -214,8 +218,23 @@ export function StatsBar({
 			)}
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
-			    the ACTUAL models billed, regardless of what the picker says. */}
-			<ModelControl chatId={chatId} onModelChange={modelChanged} />
+			    the ACTUAL models billed, regardless of what the picker says.
+			    On a phone (mobile wave) the two pills hide behind one sliders
+			    button: they are a rare desktop adjustment, and the row has no
+			    room for them. */}
+			<div className={showModels ? "flex items-center gap-2" : "hidden items-center gap-2 md:flex"}>
+				<ModelControl chatId={chatId} onModelChange={modelChanged} />
+			</div>
+			<button
+				type="button"
+				aria-label={showModels ? "Hide model settings" : "Model settings"}
+				aria-expanded={showModels}
+				data-testid="stats-model-toggle"
+				onClick={() => setShowModels((v) => !v)}
+				className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card/85 text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground md:hidden"
+			>
+				<SlidersHorizontalIcon className="size-3.5" />
+			</button>
 		</div>
 	);
 }

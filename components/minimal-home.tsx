@@ -165,7 +165,7 @@ export function MinimalHome({
 			    canvas things and stay gone; Import ALWAYS renders (the
 			    entry law). */}
 			<div className="lh-no-drag lh-wco-floating lh-safe-top-2 absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
-				<div className="flex min-w-0 items-start gap-2">
+				<div className="flex min-w-0 flex-wrap items-start justify-end gap-2">
 					<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<Hint label="Every reasoning chain" side="bottom">
 							<button
@@ -175,7 +175,7 @@ export function MinimalHome({
 								className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
 							>
 								<ListTreeIcon className="size-3" />
-								Chains
+								<span className="max-md:sr-only">Chains</span>
 							</button>
 						</Hint>
 					</div>
@@ -189,7 +189,7 @@ export function MinimalHome({
 								className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
 							>
 								<UploadIcon className="size-3" />
-								{importing ? "Importing…" : "Import notes…"}
+								<span className="max-md:sr-only">{importing ? "Importing…" : "Import notes…"}</span>
 							</button>
 						</Hint>
 					</div>

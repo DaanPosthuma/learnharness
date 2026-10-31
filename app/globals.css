@@ -660,3 +660,13 @@ select {
 .lh-safe-bottom-0 {
 	padding-bottom: env(safe-area-inset-bottom);
 }
+
+/* Shown only on touch devices (the counterpart of .lh-hide-touch). */
+.lh-touch-only {
+	display: none;
+}
+@media (hover: none) and (pointer: coarse) {
+	.lh-touch-only {
+		display: inline;
+	}
+}

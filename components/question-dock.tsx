@@ -177,6 +177,10 @@ export function QuestionDock({
 /** A plain-text teaser of a question for the collapsed bar: unwrap math, flatten common LaTeX. */
 function teaserText(q: string): string {
 	return repairMathForDisplay(q)
+		// Matrices read as noise in a one-line teaser ("beginpmatrix 2 & 1 \\
+		// 0 & 1 endpmatrix" on the phone fold bar): name them instead.
+		.replace(/\\begin\{[pbvV]?matrix\}[\s\S]*?\\end\{[pbvV]?matrix\}/g, "[matrix]")
+		.replace(/\\\\/g, " ")
 		.replace(/\\\(([\s\S]*?)\\\)/g, "$1") // \(...\) inline math
 		.replace(/\\\[([\s\S]*?)\\\]/g, "$1") // \[...\] display math
 		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // standard $...$/$$...$$ math
