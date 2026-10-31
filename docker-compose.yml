@@ -1,0 +1,43 @@
+# LearnHarness for a family, on one small box (mobile/accounts wave).
+#
+#   LH_DOMAIN=learn.example.com docker compose up -d
+#   docker compose exec app node gateway/cli.mjs add <name>
+#
+# Caddy terminates TLS (automatic Let's Encrypt for LH_DOMAIN) and streams
+# to the gateway; the gateway signs people in and runs one LearnHarness
+# process per user. Everything persistent is in the two named volumes.
+services:
+  app:
+    image: ${LH_IMAGE:-learnharness-web:local}
+    build: .
+    restart: unless-stopped
+    environment:
+      LH_HOME: /var/lib/learnharness
+      LH_IDLE_MINUTES: ${LH_IDLE_MINUTES:-60}
+      LH_COOKIE_SECURE: ${LH_COOKIE_SECURE:-auto}
+    volumes:
+      - lh-data:/var/lib/learnharness
+    expose:
+      - "8080"
+    # Chromium (demo verification) needs a bigger shared memory segment.
+    shm_size: 256m
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LH_DOMAIN: ${LH_DOMAIN:?set LH_DOMAIN to the public hostname (e.g. learn.example.com)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  lh-data:
+  caddy-data:
+  caddy-config:

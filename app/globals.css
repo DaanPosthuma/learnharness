@@ -598,3 +598,75 @@ body {
 	outline: 1px solid var(--border);
 	border-radius: 0.25rem;
 }
+
+/* ---------------------------------------------------------------------------
+   MOBILE (mobile wave, 2026-10-31): phone-width rules. The sidebar becomes a
+   drawer (components/sidebar.tsx); these rules handle what CSS owns —
+   notched-phone safe areas and iOS form zoom.
+   --------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+	/* iOS Safari zooms the page when a focused control renders text below
+	   16px. Every input/textarea reads at the 16px rung on phones. */
+	input,
+	textarea,
+	select {
+		font-size: 16px !important;
+	}
+	/* Edge-to-edge viewport (viewport-fit=cover): keep the drawer and the
+	   bottom dock clear of the notch, home indicator and rounded corners. */
+	aside.sidebar-motion > div {
+		padding-top: env(safe-area-inset-top);
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+	.lh-mobile-safe-bottom {
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+}
+
+/* Touch devices (mobile wave): keyboard-shortcut hints mean nothing without
+   a hardware keyboard; taps should not flash or wait for a double-tap. */
+@media (hover: none) and (pointer: coarse) {
+	.lh-hide-touch {
+		display: none;
+	}
+}
+button,
+[role="button"],
+a,
+input,
+textarea,
+select {
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+}
+
+/* Notched phones in standalone (home-screen) mode: the status bar is
+   translucent and the page runs under it (viewport-fit=cover), so the top
+   chrome and the bottom docks step inside the safe area. Zero everywhere
+   else. */
+.lh-top-bar {
+	height: calc(3.75rem + env(safe-area-inset-top));
+	padding-top: env(safe-area-inset-top);
+}
+.lh-safe-top {
+	padding-top: calc(0.5rem + env(safe-area-inset-top));
+}
+.lh-safe-top-2 {
+	top: calc(0.5rem + env(safe-area-inset-top));
+}
+.lh-safe-bottom {
+	padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+}
+.lh-safe-bottom-0 {
+	padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Shown only on touch devices (the counterpart of .lh-hide-touch). */
+.lh-touch-only {
+	display: none;
+}
+@media (hover: none) and (pointer: coarse) {
+	.lh-touch-only {
+		display: inline;
+	}
+}

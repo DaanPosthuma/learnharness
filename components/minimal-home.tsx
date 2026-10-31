@@ -153,8 +153,8 @@ export function MinimalHome({
 			    window instead. Node search and the render-settings gear are
 			    canvas things and stay gone; Import ALWAYS renders (the
 			    entry law). */}
-			<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
-				<div className="flex min-w-0 items-start gap-2">
+			<div className="lh-no-drag lh-wco-floating lh-safe-top-2 absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+				<div className="flex min-w-0 flex-wrap items-start justify-end gap-2">
 					<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<Hint label="Every reasoning chain" side="bottom">
 							<button
@@ -164,7 +164,7 @@ export function MinimalHome({
 								className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
 							>
 								<ListTreeIcon className="size-3" />
-								Chains
+								<span className="max-md:sr-only">Chains</span>
 							</button>
 						</Hint>
 					</div>

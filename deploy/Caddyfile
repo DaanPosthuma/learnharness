@@ -1,0 +1,10 @@
+# TLS front door for the LearnHarness gateway (docker-compose.yml).
+# LH_DOMAIN is the public hostname; Caddy fetches and renews its certificate.
+{$LH_DOMAIN} {
+	encode zstd gzip
+	# Streams (SSE: /api/events, /api/chats/:id/stream) must not be buffered.
+	reverse_proxy app:8080 {
+		flush_interval -1
+		header_up X-Forwarded-Proto https
+	}
+}

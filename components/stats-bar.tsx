@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { CLAUDE_CODE_PROVIDER, sessionCacheHitRate, subscriptionLabels, subscriptionLabel, type cliContextWindowOf, type SessionPricing, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, planCostLabel, prettyModel } from "@/components/usage-format";
 import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model-picker";
+import { SlidersHorizontalIcon } from "lucide-react";
 
 export function formatContextMeasurement(tokens: number | null, limit: number | null): string {
 	const numerator = tokens === null ? "?" : formatTokens(tokens);
@@ -113,6 +114,9 @@ export function StatsBar({
 	const cliBilled = turns.some((turn) => turn.model.startsWith(`${CLAUDE_CODE_PROVIDER}:`));
 	const costLabel = planCostLabel(pricedCount > 0 ? cost : null, cliBilled ? [...providers, "CLI"] : providers);
 
+	// Phone-only reveal of the model/thinking pills (mobile wave).
+	const [showModels, setShowModels] = useState(false);
+
 	return (
 		<div
 			data-testid="stats-bar"
@@ -120,7 +124,7 @@ export function StatsBar({
 			// (so its transparent gradient area never blocks scrolling) — this row
 			// must re-enable events or every control on it is dead (the model-
 			// control wave caught this live: buttons rendered, clicks never landed).
-			className="pointer-events-auto relative flex items-center justify-between gap-3 px-3 pt-2 text-xs text-muted-foreground"
+			className="pointer-events-auto relative flex flex-wrap items-center justify-between gap-3 px-3 pt-2 text-xs text-muted-foreground"
 		>
 			{/* The summary button + its popover: the popover anchors to this
 			    wrapper, CENTERED over the button itself (owner, stats round 2)
@@ -142,7 +146,7 @@ export function StatsBar({
 				onClick={() => setOpen((o) => !o)}
 				aria-expanded={open}
 				data-testid="stats-summary"
-				className="flex items-center gap-1.5 tabular-nums transition-colors hover:text-foreground"
+				className="flex items-center gap-1.5 whitespace-nowrap tabular-nums transition-colors hover:text-foreground"
 			>
 				<span data-testid="stats-context">
 					{contextLabel}
@@ -221,8 +225,23 @@ export function StatsBar({
 			)}
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
-			    the ACTUAL models billed, regardless of what the picker says. */}
-			<ModelControl chatId={chatId} onModelChange={modelChanged} />
+			    the ACTUAL models billed, regardless of what the picker says.
+			    On a phone (mobile wave) the two pills hide behind one sliders
+			    button: they are a rare desktop adjustment, and the row has no
+			    room for them. */}
+			<div className={showModels ? "flex items-center gap-2" : "hidden items-center gap-2 md:flex"}>
+				<ModelControl chatId={chatId} onModelChange={modelChanged} />
+			</div>
+			<button
+				type="button"
+				aria-label={showModels ? "Hide model settings" : "Model settings"}
+				aria-expanded={showModels}
+				data-testid="stats-model-toggle"
+				onClick={() => setShowModels((v) => !v)}
+				className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card/85 text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground md:hidden"
+			>
+				<SlidersHorizontalIcon className="size-3.5" />
+			</button>
 		</div>
 	);
 }

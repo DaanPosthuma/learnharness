@@ -174,6 +174,15 @@ export function QuestionDock({
 /** A plain-text teaser of a question for the collapsed bar: unwrap math, flatten common LaTeX. */
 function teaserText(q: string): string {
 	return repairMathForDisplay(q)
+		// Matrices read as noise in a one-line teaser ("beginpmatrix 2 & 1 \\
+		// 0 & 1 endpmatrix" on the phone fold bar): name them instead.
+		.replace(/\\begin\{[pbvV]?matrix\}[\s\S]*?\\end\{[pbvV]?matrix\}/g, "[matrix]")
+		.replace(/\\\\/g, " ")
+		// Markdown emphasis and blockquote markers are noise in a one-line
+		// teaser ("> « Il **faisait** nuit"); the blanks (___) stay.
+		.replace(/^\s*>\s?/gm, "")
+		.replace(/\*\*([^*]+)\*\*/g, "$1")
+		.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
 		.replace(/\\\(([\s\S]*?)\\\)/g, "$1") // \(...\) inline math
 		.replace(/\\\[([\s\S]*?)\\\]/g, "$1") // \[...\] display math
 		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // standard $...$/$$...$$ math
@@ -913,7 +922,7 @@ function QuestionDockForm({
 					)}
 					<div className="flex items-center justify-between gap-2 p-1">
 						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
-								{compactionRunning ? "compacting session…" : "↵ submits · ⇧↵ newline"}
+								{compactionRunning ? "compacting session…" : <span className="lh-hide-touch">↵ submits · ⇧↵ newline</span>}
 						</span>
 						<Button
 							type="submit"
