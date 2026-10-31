@@ -8,7 +8,7 @@ Three layers, each independent of the others:
 
 | Layer | Where | What it does |
 |---|---|---|
-| PWA + offline | `app/manifest.ts`, `public/sw.js`, `components/pwa.tsx`, `components/offline-library.tsx`, `app/offline/page.tsx` | Installable from the browser; the service worker keeps the app shell, the knowledge graph, and recent sessions readable with no signal; the offline banner |
+| PWA + offline | `public/manifest.webmanifest`, `public/sw.js`, `components/pwa.tsx`, `components/offline-library.tsx`, `app/offline/page.tsx` | Installable from the browser; the service worker keeps the app shell, the knowledge graph, and recent sessions readable with no signal; the offline banner |
 | Offline outbox | `components/session-core.ts` (OFFLINE OUTBOX) | A message or answer sent with no connection waits for `online`, survives a reload, and posts itself when the signal returns |
 | Accounts gateway | `gateway/` | Sign-in with username + password; one LearnHarness process per user, each on its own data directory; nothing in the app itself is multi-tenant |
 | Mobile layout | `components/sidebar.tsx`, `app/globals.css` (MOBILE) | Below 768px the sidebar is a drawer; safe-area insets; no iOS input zoom |
@@ -50,6 +50,12 @@ phone ── https ── Caddy ── gateway :8080 ──┬── next start 
   at first sign-in.
 - Data root (`LH_HOME`, default `/var/lib/learnharness`): `users.json`
   (scrypt hashes), `gateway-secret`, `users/<name>/data`, `users/<name>/auth.json`.
+- Served to anyone, straight from `public/`: the web manifest (browsers fetch
+  it without cookies), the worker script and the icons — the install prompt
+  needs them before sign-in. Every other path needs the cookie; an API call
+  without one gets `401` with `x-lh-gateway: unauthorized`, which is the only
+  401 the service worker treats as "sign in again" (the app's own routes also
+  answer 401, e.g. dictation without a Deepgram key).
 - Each user adds their **own provider keys** in Settings, exactly as on the
   desktop app. Keys are never shared between accounts.
 
