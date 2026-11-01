@@ -65,7 +65,9 @@ phone ── https ── Caddy ── gateway :8080 ──┬── next start 
   this (2026-10-31) a lingering process kept its table entry and every
   request got "The app is not reachable right now".
 
-The gateway is zero-dependency Node and has tests (`tests/gateway-lib.test.ts`).
+The gateway is zero-dependency Node and has tests: `tests/gateway-lib.test.ts`
+(passwords, sessions) and `tests/gateway-upstreams.test.ts` (the per-user
+process lifecycle, driven with fake processes and a fake clock).
 
 ## Run it locally
 
@@ -110,8 +112,10 @@ volume, $3.60 for the public IPv4 address, a few cents for ECR.
 Updating (2026-11-01): **merge to `main`.** The GitHub Actions workflow
 `.github/workflows/deploy.yml` builds the image on GitHub's runners, pushes
 it to ECR (`latest` + the commit sha) and runs `/usr/local/bin/lh-update` on
-the box over SSM (ECR login, pull, `compose up -d`), then checks
-`/gateway/health`. The production instance never builds; the only
+the box over SSM (ECR login, pull, `compose up -d`), then checks that
+`/gateway/health` reports the commit it just pushed (the image bakes it in as
+`LH_BUILD_SHA`). Typecheck, tests and lint run in parallel with the image
+build; the box is only updated when both pass. The production instance never builds; the only
 interruption is the app container restart, about ten seconds. Auth is
 OIDC: the IAM role `learnharness-github-deploy` trusts only this repo's
 `main` branch and may only push to the one ECR repo and run the one SSM

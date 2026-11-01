@@ -6,6 +6,12 @@ name: Deploy web app
 # container (~10 s). Auth is OIDC — the role trusts only this repo's main
 # branch; there are no long-lived AWS keys in the repo secrets.
 #
+# Three jobs: `quality` (typecheck, tests, lint) and `build` (image → ECR
+# under the commit sha) run in parallel; `deploy` waits for both, moves the
+# `latest` tag to that sha, runs lh-update on the box and checks that the
+# live site reports the very build it just pushed. A red test suite never
+# reaches the box, and no time is lost waiting for it.
+#
 # Fork-local: this workflow belongs to the DaanPosthuma fork's deployment
 # and is a no-op anywhere else.
 
@@ -32,13 +38,32 @@ env:
   ECR_IMAGE: 489323024070.dkr.ecr.eu-west-2.amazonaws.com/learnharness-web
   INSTANCE_ID: i-00d4a1eab8468a1b5
   SITE: https://3-11-119-60.sslip.io
+  NEXT_TELEMETRY_DISABLED: "1"
 
 jobs:
-  deploy:
-    name: Build image, push to ECR, update the box
+  quality:
+    name: Typecheck, tests, lint
     if: github.repository == 'DaanPosthuma/learnharness'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
+
+  build:
+    name: Build image, push under the commit sha
+    if: github.repository == 'DaanPosthuma/learnharness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
@@ -54,18 +79,40 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.ECR_IMAGE }}:latest
-            ${{ env.ECR_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.ECR_IMAGE }}:${{ github.sha }}
+          build-args: LH_BUILD_SHA=${{ github.sha }}
+          # Plain image manifests only: attestation manifests would show up
+          # as untagged images in ECR and eat the "keep 5" lifecycle budget.
+          provenance: false
+          sbom: false
           # The dependency layer rarely changes; the GitHub cache keeps it
           # from being rebuilt on every app-only push.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: Tag latest, update the box, verify
+    needs: [quality, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Assume the deploy role (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Move the latest tag to this build (registry-side, no re-push)
+        run: docker buildx imagetools create -t "$ECR_IMAGE:latest" "$ECR_IMAGE:$GITHUB_SHA"
 
       - name: Roll the box onto the new image
         shell: bash
@@ -92,12 +139,27 @@ jobs:
           [ "$status" = Success ] || { echo "::error::lh-update did not finish in time"; exit 1; }
           aws ssm get-command-invocation --command-id "$cmd" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text | tail -5
 
-      - name: Check the site answers
+      - name: Verify the live site runs this build
         shell: bash
         run: |
           set -euo pipefail
           for _ in $(seq 1 30); do
-            if curl -fsS -m 10 "$SITE/gateway/health" >/dev/null; then echo "healthy: $SITE"; exit 0; fi
+            health=$(curl -fsS -m 10 "$SITE/gateway/health" || true)
+            if [ -n "$health" ] && [ "$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))')" = "$GITHUB_SHA" ]; then
+              echo "live build is $GITHUB_SHA"
+              break
+            fi
             sleep 5
           done
-          echo "::error::$SITE did not answer after the update"; exit 1
+          [ "$(printf '%s' "${health:-}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null)" = "$GITHUB_SHA" ] \
+            || { echo "::error::$SITE does not report build $GITHUB_SHA (health: ${health:-none})"; exit 1; }
+          # The sign-in page and the installable assets are served to anyone.
+          curl -fsS -m 10 -o /dev/null "$SITE/login"
+          curl -fsS -m 10 -o /dev/null "$SITE/manifest.webmanifest"
+          curl -fsS -m 10 -o /dev/null "$SITE/sw.js"
+          {
+            echo "### Deployed ${GITHUB_SHA::7}"
+            echo
+            echo "- Image: \`$ECR_IMAGE@${{ needs.build.outputs.digest }}\`"
+            echo "- Site: $SITE (health reports build \`${GITHUB_SHA::7}\`)"
+          } >> "$GITHUB_STEP_SUMMARY"

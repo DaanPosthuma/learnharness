@@ -32,6 +32,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createUpstreamManager } from "./upstreams.mjs";
 import {
 	escapeHtml, loadOrCreateSecret, loadUsers, parseCookies, safeNext, saveUsers, sessionPayload, sessionUser,
 	signSession, upsertUser, verifyPassword, verifySession,
@@ -49,6 +50,9 @@ const COOKIE = "lh_session";
 const COOKIE_SECURE = process.env.LH_COOKIE_SECURE ?? "auto";
 const NEXT_BIN = path.join(APP_DIR, "node_modules", "next", "dist", "bin", "next");
 const START_TIMEOUT_MS = 90_000;
+// The git sha the image was built from (Dockerfile ARG → ENV); /gateway/health
+// reports it so a deploy can verify the box runs the build it just pushed.
+const BUILD = process.env.LH_BUILD_SHA || "dev";
 // After SIGTERM, how long a user process may linger before SIGKILL.
 const STOP_GRACE_MS = 15_000;
 
@@ -57,15 +61,6 @@ const SECRET = loadOrCreateSecret(HOME);
 const log = (...a) => console.log(new Date().toISOString(), "[gateway]", ...a);
 
 // ------------------------------------------------------------ user processes
-
-/** name → { port, proc, ready: Promise<void>, lastSeen, stopping } */
-const upstreams = new Map();
-const usedPorts = new Set();
-
-function allocPort() {
-	for (let p = BASE_PORT; p < BASE_PORT + 500; p++) if (!usedPorts.has(p)) { usedPorts.add(p); return p; }
-	throw new Error("no free upstream port");
-}
 
 function waitForPort(port, deadline) {
 	return new Promise((resolve, reject) => {
@@ -82,10 +77,8 @@ function waitForPort(port, deadline) {
 	});
 }
 
-function ensureUpstream(name) {
-	const live = upstreams.get(name);
-	if (live) { live.lastSeen = Date.now(); return live; }
-	const port = allocPort();
+/** Spawn one user's app on a loopback port: own data dir, own auth file. */
+function launch(name, port) {
 	const userDir = path.join(HOME, "users", name);
 	const dataDir = path.join(userDir, "data");
 	mkdirSync(dataDir, { recursive: true });
@@ -109,50 +102,19 @@ function ensureUpstream(name) {
 	const prefix = (chunk) => chunk.toString().split("\n").filter(Boolean).map((l) => `[${name}] ${l}`).join("\n");
 	proc.stdout.on("data", (c) => console.log(prefix(c)));
 	proc.stderr.on("data", (c) => console.error(prefix(c)));
-	const entry = { port, proc, lastSeen: Date.now(), stopping: false, ready: waitForPort(port, Date.now() + START_TIMEOUT_MS) };
-	entry.ready.catch((err) => stopUpstream(name, entry, err.message));
-	proc.on("exit", (code, signal) => {
-		log(`app for ${name} exited (${signal ?? code})`);
-		if (upstreams.get(name) === entry) upstreams.delete(name);
-		usedPorts.delete(port);
-	});
-	upstreams.set(name, entry);
-	return entry;
+	return { proc, ready: waitForPort(port, Date.now() + START_TIMEOUT_MS) };
 }
 
-/**
- * Stop a user's process and forget it AT ONCE, so the next request starts a
- * fresh one on a free port (the old port stays reserved until the process
- * really exits). Next.js answers SIGTERM by closing its listener and then
- * waiting for open connections to drain — and a browser tab's EventSource
- * never drains. Seen live 2026-10-31: the "stopped" process lingered for an
- * hour, the gateway kept its table entry and proxied every request into a
- * closed port (ECONNREFUSED → "The app is not reachable right now").
- */
-function stopUpstream(name, entry, why) {
-	if (upstreams.get(name) === entry) upstreams.delete(name);
-	if (entry.stopping) return;
-	entry.stopping = true;
-	log(`stopping app for ${name} (${why})`);
-	entry.proc.kill("SIGTERM");
-	setTimeout(() => {
-		if (entry.proc.exitCode === null && entry.proc.signalCode === null) {
-			log(`app for ${name} did not exit after SIGTERM; killing`);
-			entry.proc.kill("SIGKILL");
-		}
-	}, STOP_GRACE_MS).unref();
-}
-
-setInterval(() => {
-	const now = Date.now();
-	for (const [name, u] of upstreams) {
-		if (now - u.lastSeen > IDLE_MS) stopUpstream(name, u, "idle");
-	}
-}, 60_000).unref();
+// The lifecycle rules (forget-at-once, SIGKILL after grace, idle sweep) live
+// in gateway/upstreams.mjs, where tests can drive them without spawning.
+const upstreams = createUpstreamManager({ launch, basePort: BASE_PORT, idleMs: IDLE_MS, graceMs: STOP_GRACE_MS, log });
+const ensureUpstream = (name) => upstreams.ensure(name);
+const stopUpstream = (name, entry, why) => upstreams.stop(name, entry, why);
+setInterval(() => upstreams.sweep(), 60_000).unref();
 
 function shutdown() {
 	log("shutting down");
-	for (const [name, u] of upstreams) stopUpstream(name, u, "shutdown");
+	upstreams.stopAll("shutdown");
 	server.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 5000).unref();
 }
@@ -309,7 +271,7 @@ async function handle(req, res) {
 	const url = new URL(req.url, "http://gateway");
 	const p = url.pathname;
 
-	if (p === "/gateway/health") return send(res, 200, JSON.stringify({ ok: true, users: upstreams.size }), "application/json");
+	if (p === "/gateway/health") return send(res, 200, JSON.stringify({ ok: true, users: upstreams.size, build: BUILD }), "application/json");
 
 	if (req.method === "GET" || req.method === "HEAD") {
 		const file = publicFile(p);
