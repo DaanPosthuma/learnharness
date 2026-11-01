@@ -107,8 +107,18 @@ What it creates (all idempotent, all named `learnharness*`):
 Rough monthly cost in eu-west-2: about $14 for the instance, $1.30 for the
 volume, $3.60 for the public IPv4 address, a few cents for ECR.
 
-Updating: build and push a new image, then `deploy/aws-launch.sh update`
-(runs `/usr/local/bin/lh-update` on the box: ECR login, pull, `compose up -d`).
+Updating (2026-11-01): **merge to `main`.** The GitHub Actions workflow
+`.github/workflows/deploy.yml` builds the image on GitHub's runners, pushes
+it to ECR (`latest` + the commit sha) and runs `/usr/local/bin/lh-update` on
+the box over SSM (ECR login, pull, `compose up -d`), then checks
+`/gateway/health`. The production instance never builds; the only
+interruption is the app container restart, about ten seconds. Auth is
+OIDC: the IAM role `learnharness-github-deploy` trusts only this repo's
+`main` branch and may only push to the one ECR repo and run the one SSM
+document on the one instance — no AWS keys live in GitHub. Docs-only
+pushes do not deploy; *Actions → Deploy web app → Run workflow* forces one.
+By hand, from a machine that can build: `deploy/aws-launch.sh push` then
+`deploy/aws-launch.sh update`.
 
 Sizing: the gateway idles at ~50 MB; each active user's Next.js process
 takes 250–400 MB and is stopped after `LH_IDLE_MINUTES` without requests. A
@@ -140,9 +150,10 @@ off-screen in portrait (drag or pinch to see it); markdown tables scroll
 horizontally; the learner's confidence slider defaults to 50% and the
 teacher notices when it never moves.
 
-## Building the image on the server (fallback)
+## Building the image on the server (last resort)
 
-When the laptop cannot build (Docker Desktop down), build on the box. A
+Normally unnecessary: the deploy workflow builds on GitHub. If Actions is
+unavailable and the laptop cannot build either, build on the box. A
 `t3a.small` runs out of memory in `next build`, so resize for the build:
 
 ```bash
