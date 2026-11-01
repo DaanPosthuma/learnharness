@@ -21,6 +21,13 @@ else
 fi
 
 # 2. The role only the repo's main branch (and manual runs on main) can assume.
+# GitHub's subject claim now carries the owner and repository ids
+# (repo:OWNER@ID/REPO@ID:ref:...), seen in CloudTrail 2026-11-01; older
+# tokens carry plain names. Accept exactly these two spellings, nothing wider.
+OWNER_ID=$(gh api "users/${REPO%%/*}" -q .id)
+REPO_ID=$(gh api "repos/$REPO" -q .id)
+SUB_PLAIN="repo:$REPO:ref:refs/heads/main"
+SUB_IDS="repo:${REPO%%/*}@$OWNER_ID/${REPO##*/}@$REPO_ID:ref:refs/heads/main"
 cat > "$W/trust.json" <<EOF
 {
   "Version": "2012-10-17",
@@ -30,7 +37,7 @@ cat > "$W/trust.json" <<EOF
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike": { "token.actions.githubusercontent.com:sub": "repo:$REPO:ref:refs/heads/main" }
+      "StringLike": { "token.actions.githubusercontent.com:sub": ["$SUB_PLAIN", "$SUB_IDS"] }
     }
   }]
 }
