@@ -42,6 +42,33 @@ Configuration is not a continuous health check. An endpoint may be configured wh
 offline, and model capability or output quality is not proven by listing its ID.
 No backend/model installation, downloads, or OAuth flows are performed.
 
+## Route a built-in provider through a gateway (base URL)
+
+Separate from the custom endpoint above: any **built-in** provider that takes an
+API key (Anthropic, OpenAI, Google, …) can be pointed at your own gateway —
+LiteLLM, Portkey, Cloudflare AI Gateway, Helicone, a corporate proxy — while
+keeping its native protocol. The gateway must speak that provider's API (for
+Anthropic, the Messages API), the same thing `ANTHROPIC_BASE_URL` means to
+the Anthropic SDKs or Claude Code.
+
+1. Open **Settings → Providers**, click the provider's row.
+2. Fill **Base URL** beneath the key field, for example
+   `https://gateway.example.com/anthropic`, and Save. The row then shows
+   `via gateway.example.com`. Reset returns to the public API.
+
+What it changes: every request of that provider — lessons, background
+extraction, compaction — goes to that URL with the same key you saved for the
+provider. Nothing else changes: model ids, pricing, thinking levels and
+context limits are still the catalog's. Subscriptions (ChatGPT, Claude
+Pro/Max), the external CLI and the custom endpoint keep their own addresses.
+
+The URL is stored non-secret in `settings.json` under `providers.<id>.baseUrl`
+(`PUT /api/settings/providers` with the complete map). Rules are the custom
+endpoint's: absolute http(s), no credentials, query or fragment; trailing
+slashes are dropped; nothing is appended — enter the complete prefix your
+gateway expects. A malformed URL is rejected at save time rather than
+silently ignored, so a typo cannot quietly send traffic to the public API.
+
 ## Model budgets and reasoning support
 
 Settings exposes offline-editable pins per model:

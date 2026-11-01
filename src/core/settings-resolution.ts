@@ -101,6 +101,9 @@ export interface EffectiveSettings {
 	/** Custom endpoint, resolved concrete: baseUrl defaults "", models and
 	 *  user pins default to empty. */
 	customProvider: { baseUrl: string; models: CustomModel[]; overrides: Record<string, CustomModelOverride>; manualModels: string[] };
+	/** Provider endpoints (2026-11-01), resolved concrete: provider id →
+	 *  gateway base URL, only for providers that have one set. */
+	providers: Record<string, string>;
 }
 
 /** The conversation pair's chain (BYOK, owner 2026-09-22): the chat's own
@@ -236,6 +239,9 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 			overrides: record?.customProvider?.overrides ?? {},
 			manualModels: record?.customProvider?.manualModels ?? [],
 		},
+		providers: Object.fromEntries(
+			Object.entries(record?.providers ?? {}).flatMap(([id, entry]) => (entry?.baseUrl ? [[id, entry.baseUrl] as const] : [])),
+		),
 	};
 }
 
