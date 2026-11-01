@@ -24,9 +24,10 @@ import type {
 	GraphSettings,
 	ModelsSettings,
 	ModelSlot,
+	ProvidersSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
-import { BACKGROUND_MODEL_ROLES, CACHE_RETENTIONS, COMPACTION_THRESHOLD_FLOOR, CUSTOM_MODEL_PIN_FLOOR, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
+import { BACKGROUND_MODEL_ROLES, CACHE_RETENTIONS, COMPACTION_THRESHOLD_FLOOR, CUSTOM_MODEL_PIN_FLOOR, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS, PROVIDER_ID_RE, normalizeBaseUrl } from "../core/settings.ts";
 import { WRITABLE_TOOL_KEYS } from "../core/pending.ts";
 import { isDictationLanguage } from "../core/dictation.ts";
 
@@ -446,6 +447,29 @@ export function parseCustomModelOverridesBody(
 
 /** The section→parser map for PUT /api/settings/[section]. The custom endpoint
  *  is NOT a section — it connects via POST /api/custom-provider. */
+/** providers: { [providerId]: { baseUrl?: absolute http(s) URL } } — the
+ *  per-provider gateway overrides (provider endpoints, 2026-11-01).
+ *  Replace-whole like every section: the client sends the complete map; an
+ *  empty/absent baseUrl drops that provider's entry. STRICT on the rest: a
+ *  malformed URL or id is a 400, never a silent drop — a typo must not
+ *  quietly send traffic back to the public API. */
+export function parseProvidersSettingsBody(body: unknown): SettingsBodyResult<ProvidersSettings> {
+	const raw = asRecord(body);
+	if (!raw) return { ok: false, error: "Invalid JSON body" };
+	const settings: ProvidersSettings = {};
+	for (const [id, value] of Object.entries(raw)) {
+		if (!PROVIDER_ID_RE.test(id)) return { ok: false, error: `unknown provider id "${id}"` };
+		const entry = asRecord(value);
+		if (!entry) return { ok: false, error: `providers.${id} must be an object` };
+		if (entry.baseUrl === undefined || entry.baseUrl === "") continue;
+		if (typeof entry.baseUrl !== "string") return { ok: false, error: `providers.${id}.baseUrl must be a string` };
+		const base = normalizeBaseUrl(entry.baseUrl);
+		if (!base) return { ok: false, error: `providers.${id}.baseUrl must be an absolute http(s) URL without credentials, query or fragment` };
+		settings[id] = { baseUrl: base };
+	}
+	return { ok: true, settings };
+}
+
 export const SETTINGS_SECTIONS = {
 	general: parseGeneralSettingsBody,
 	chat: parseSettingsBody,
@@ -456,6 +480,7 @@ export const SETTINGS_SECTIONS = {
 	models: parseModelsSettingsBody,
 	dictation: parseDictationSettingsBody,
 	claudeCode: parseClaudeCodeSettingsBody,
+	providers: parseProvidersSettingsBody,
 } as const;
 
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;

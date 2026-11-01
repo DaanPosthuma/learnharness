@@ -159,6 +159,15 @@ export function keyStatusLine(status: AuthKeyStatus): string {
 /** One table row: label left, tiny docs link + status right. Writable
  *  rows click-unfold an editor beneath (owner interaction); env-owned
  *  rows are dimmed and read-only (a paste box there would mislead). */
+/** The host shown in a row's "via …" tag (the whole URL is its title). */
+function hostOf(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return url;
+	}
+}
+
 function KeyTableRow({
 	label,
 	docsUrl,
@@ -169,6 +178,7 @@ function KeyTableRow({
 	onDelete,
 	onCancel,
 	testid,
+	endpoint,
 }: {
 	label: string;
 	/** The "Get a key ↗" target — curated keys carry one. */
@@ -182,11 +192,19 @@ function KeyTableRow({
 	 *  must be visible — Cancel beside Save/Delete, not only Esc). */
 	onCancel: () => void;
 	testid: string;
+	/** Provider endpoints (2026-11-01): model providers carry their gateway
+	 *  base URL ("" = the provider's default) and a saver; "" clears it.
+	 *  Tool keys (dictation, search) have none. */
+	endpoint?: { value: string; onSave: (url: string) => Promise<string | null> };
 }) {
 	const envOwned = status.source === "env";
 	const [value, setValue] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [endpointValue, setEndpointValue] = useState(endpoint?.value ?? "");
+	// A reload after a save re-seeds the field with what landed.
+	const endpointStored = endpoint?.value ?? "";
+	useEffect(() => setEndpointValue(endpointStored), [endpointStored]);
 
 	async function save() {
 		if (!value.trim() || busy) return;
@@ -195,6 +213,15 @@ function KeyTableRow({
 		const err = await onSave(value);
 		if (err) setError(err);
 		else setValue("");
+		setBusy(false);
+	}
+
+	async function saveEndpoint(url: string) {
+		if (!endpoint || busy) return;
+		setBusy(true);
+		setError(null);
+		const err = await endpoint.onSave(url);
+		if (err) setError(err);
 		setBusy(false);
 	}
 
@@ -251,6 +278,47 @@ function KeyTableRow({
 						</button>
 					)}
 				</div>
+				{/* Provider endpoints (2026-11-01): the second editor line — the
+				    provider's base URL, for people who route their AI traffic
+				    through a gateway. Empty = the provider's public API. */}
+				{endpoint && (
+					<div className="flex items-center gap-2 rounded-sm px-1 py-1.5" data-testid={`${testid}-endpoint`}>
+						<span className="shrink-0 font-ui text-xs text-muted-foreground">Base URL</span>
+						<input
+							type="url"
+							value={endpointValue}
+							onChange={(e) => setEndpointValue(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") void saveEndpoint(endpointValue);
+							}}
+							placeholder="Default — set to route through your own gateway"
+							aria-label={`${label} base URL`}
+							data-testid={`${testid}-endpoint-input`}
+							disabled={busy}
+							className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
+						/>
+						<button
+							type="button"
+							onClick={() => void saveEndpoint(endpointValue)}
+							disabled={busy || endpointValue.trim() === endpoint.value}
+							data-testid={`${testid}-endpoint-save`}
+							className="shrink-0 text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline"
+						>
+							Save
+						</button>
+						{endpoint.value && (
+							<button
+								type="button"
+								onClick={() => void saveEndpoint("")}
+								disabled={busy}
+								data-testid={`${testid}-endpoint-reset`}
+								className="shrink-0 text-xs text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+							>
+								Reset
+							</button>
+						)}
+					</div>
+				)}
 				{error && (
 					<p role="alert" data-testid={`${testid}-error`} className="px-1 text-xs text-red-500">
 						{error}
@@ -283,6 +351,11 @@ function KeyTableRow({
 						>
 							key ↗
 						</a>
+					)}
+					{endpoint?.value && (
+						<span data-testid={`${testid}-endpoint-tag`} title={endpoint.value} className="font-mono text-[10px] text-muted-foreground/60">
+							via {hostOf(endpoint.value)}
+						</span>
 					)}
 					<span data-testid={`${testid}-status`} className="font-mono text-[11px] text-muted-foreground">
 						{keyStatusLine(status)}
@@ -387,6 +460,9 @@ export function KeysSection({
 	/** The custom endpoint's status + whether its connect editor is open. */
 	const [custom, setCustom] = useState<CustomStatus | null>(null);
 	const [addingCustom, setAddingCustom] = useState(false);
+	/** Provider endpoints (2026-11-01): provider id → gateway base URL, from
+	 *  the settings record's `providers` section. */
+	const [endpoints, setEndpoints] = useState<Record<string, string>>({});
 
 	// Escape folds any open editor (unfolded row or the Add-provider paste)
 	// WITHOUT closing the dialog. Claimed at document CAPTURE phase — the
@@ -426,7 +502,37 @@ export function KeysSection({
 		} catch {
 			/* custom status unavailable — leave it unset */
 		}
+		// Same independence for the gateway URLs: unavailable = rows show
+		// the provider defaults, the key list above is untouched.
+		try {
+			const body = (await fetch("/api/settings").then((r) => r.json())) as { settings?: { providers?: Record<string, { baseUrl?: string } | undefined> } | null };
+			const next: Record<string, string> = {};
+			for (const [id, entry] of Object.entries(body.settings?.providers ?? {})) if (entry?.baseUrl) next[id] = entry.baseUrl;
+			setEndpoints(next);
+		} catch {
+			/* endpoints unavailable — leave the defaults */
+		}
 	};
+
+	/** PUT the complete providers map (replace-whole, like every section)
+	 *  with this provider's URL set, or dropped when url is empty. */
+	async function saveEndpoint(providerId: string, url: string): Promise<string | null> {
+		const next: Record<string, { baseUrl: string }> = {};
+		for (const [id, base] of Object.entries(endpoints)) if (id !== providerId) next[id] = { baseUrl: base };
+		if (url.trim()) next[providerId] = { baseUrl: url.trim() };
+		const res = await fetch("/api/settings/providers", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(next),
+		}).catch(() => null);
+		if (!res) return "Save failed. Check your connection.";
+		if (!res.ok) {
+			const body = (await res.json().catch(() => ({}))) as { error?: string };
+			return body.error ?? `Save failed (${res.status})`;
+		}
+		await reload();
+		return null;
+	}
 
 	useEffect(() => {
 		void reload();
@@ -492,7 +598,12 @@ export function KeysSection({
 	return (
 		<>
 			<SettingsGroup label="Model API keys" testid="group-provider-keys">
-				{providerRows.map((status) => (
+				{providerRows.map((status) => {
+					// Provider endpoints (2026-11-01): the row's provider id (by
+					// env var) keys its gateway URL. Providers sharing one env var
+					// share the first match — the one the table labels.
+					const providerId = providers?.find((p) => p.envVar === status.id)?.id;
+					return (
 					<KeyTableRow
 						key={status.id}
 						label={providerKeyLabel(status.id, providers) ?? status.info?.label ?? status.id}
@@ -508,8 +619,10 @@ export function KeysSection({
 						onCancel={() => setOpenRow(null)}
 						onDelete={() => deleteKey(status.id)}
 						testid={`key-${status.id.toLowerCase()}`}
+						endpoint={providerId ? { value: endpoints[providerId] ?? "", onSave: (url) => saveEndpoint(providerId, url) } : undefined}
 					/>
-				))}
+					);
+				})}
 				{custom?.baseUrl && (
 					<CustomEndpointRow
 						status={custom}

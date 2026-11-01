@@ -14,6 +14,7 @@ import {
 	FACTORY_SETTINGS,
 	BACKGROUND_MODEL_ROLES,
 	isHexColor,
+	providerBaseUrl,
 	sanitizeUserSettings,
 } from "../src/core/settings.ts";
 
@@ -212,5 +213,28 @@ describe("sanitizeUserSettings", () => {
 			"extractor",
 			"auditor",
 		]);
+	});
+});
+
+describe("providers section (provider endpoints, 2026-11-01)", () => {
+	it("keeps well-formed entries normalized and drops the rest without failing the record", () => {
+		const out = sanitizeUserSettings({
+			providers: {
+				anthropic: { baseUrl: "https://gateway.example.com/anthropic/" },
+				openai: { baseUrl: "not a url" },
+				google: "https://gateway.example.com",
+				"Bad Id": { baseUrl: "https://gateway.example.com" },
+			},
+		});
+		assert.ok(out);
+		assert.deepEqual(out.providers, { anthropic: { baseUrl: "https://gateway.example.com/anthropic" } });
+	});
+
+	it("providerBaseUrl: the set URL, undefined otherwise (absent record, absent section, absent provider)", () => {
+		const record = sanitizeUserSettings({ providers: { anthropic: { baseUrl: "https://gateway.example.com" } } });
+		assert.equal(providerBaseUrl(record, "anthropic"), "https://gateway.example.com");
+		assert.equal(providerBaseUrl(record, "openai"), undefined);
+		assert.equal(providerBaseUrl({ version: 1 }, "anthropic"), undefined);
+		assert.equal(providerBaseUrl(null, "anthropic"), undefined);
 	});
 });

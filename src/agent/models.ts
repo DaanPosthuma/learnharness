@@ -14,6 +14,7 @@ import { lazyApi, lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import { CLAUDE_CODE_PROVIDER } from "../core/contracts/claude-code.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
@@ -111,6 +112,10 @@ export interface ResolvedModelSpec {
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
+	/** Provider endpoints (2026-11-01): the user's gateway for this
+	 *  provider — replaces the catalog's base URL on the engine's model.
+	 *  Set by the server from the settings record; absent = default. */
+	baseUrl?: string;
 }
 
 /** The first entry of the baked default order the model supports (owner,
@@ -137,10 +142,17 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 	// Custom endpoint owners authorize image attempts independently of sparse
 	// discovery metadata. Never promote the registered/catalog capabilities.
 	const permitImages = (value: Model<Api>): Model<Api> => ({ ...value, input: ["text", "image"] });
-	const model = custom && registeredModel ? permitImages(registeredModel) : registeredModel;
-	if (!model) {
+	const catalogModel = custom && registeredModel ? permitImages(registeredModel) : registeredModel;
+	if (!catalogModel) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
+	// Provider endpoints (2026-11-01): a built-in provider routed through the
+	// user's gateway — the spec's baseUrl replaces the catalog's on the model
+	// the agent streams with (pi-ai builds its HTTP client from model.baseUrl).
+	// Subscriptions, the external CLI, ChatGPT and the custom endpoint own
+	// their own addresses and ignore it.
+	const routed = Boolean(spec.baseUrl) && !custom && !nativeId && spec.provider !== "chatgpt" && spec.provider !== CLAUDE_CODE_PROVIDER;
+	const model: Model<Api> = routed ? { ...catalogModel, baseUrl: spec.baseUrl! } : catalogModel;
 	// UNSET level → the baked default order (first entry the model
 	// supports); SET level → pi's native nearest-clamp (model swaps keep
 	// the user's intent and adapt honestly).

@@ -297,6 +297,28 @@ export function normalizeBaseUrl(raw: string): string {
 	return url.toString().replace(/\/+$/, "");
 }
 
+/** Per-provider endpoint overrides (provider endpoints, 2026-11-01): route
+ *  a BUILT-IN provider's traffic through your own gateway (LiteLLM, Portkey,
+ *  Cloudflare AI Gateway, …) instead of its public API. Keyed by pi-ai
+ *  provider id ("anthropic", "openai", …); the value's baseUrl replaces the
+ *  catalog's for every request of that provider. Non-secret: the key still
+ *  comes from the provider's own env var / auth.json entry. */
+export interface ProviderEndpointSettings {
+	/** Normalized (normalizeBaseUrl). Empty/absent = the provider's default. */
+	baseUrl?: string;
+}
+export type ProvidersSettings = Record<string, ProviderEndpointSettings>;
+
+/** pi-ai provider ids: a lowercase word with digits and dashes. */
+export const PROVIDER_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+/** THE lookup consumers use: the user's base URL for a provider, or
+ *  undefined when none is set (the catalog's address applies). */
+export function providerBaseUrl(settings: UserSettings | null | undefined, provider: string): string | undefined {
+	const url = settings?.providers?.[provider]?.baseUrl;
+	return url ? url : undefined;
+}
+
 /** THE single source of "is the custom endpoint usable?": a non-empty base URL.
  *  Key presence is deliberately excluded (keyless local servers are allowed). */
 export function customProviderUsable(
@@ -474,6 +496,8 @@ export interface UserSettings {
 	models?: ModelsSettings;
 	/** The custom OpenAI-compatible endpoint (non-secret config only). */
 	customProvider?: CustomProviderSettings;
+	/** Gateway URLs for built-in providers (provider endpoints, 2026-11-01). */
+	providers?: ProvidersSettings;
 	appearance?: AppearanceSettings;
 	graph?: GraphSettings;
 	compaction?: CompactionSettings;
@@ -638,6 +662,22 @@ export function sanitizeCustomModelOverrides(
 		if (!id || (live && !live.has(id))) continue;
 		const pin = sanitizeCustomModelOverride(value);
 		if (pin) Object.defineProperty(out, id, { value: pin, enumerable: true, configurable: true, writable: true });
+	}
+	return out;
+}
+
+/** The providers section (provider endpoints, 2026-11-01): entries keyed by
+ *  a well-formed provider id whose baseUrl normalizes to something; anything
+ *  else drops. Clamp-never-reject — a bad disk value falls back to the
+ *  provider's default address, it never blocks the record. */
+function sanitizeProviders(raw: Record<string, unknown>): ProvidersSettings {
+	const out: ProvidersSettings = {};
+	for (const [id, value] of Object.entries(raw)) {
+		if (!PROVIDER_ID_RE.test(id) || value === null || typeof value !== "object" || Array.isArray(value)) continue;
+		const entry = value as Record<string, unknown>;
+		if (typeof entry.baseUrl !== "string") continue;
+		const base = normalizeBaseUrl(entry.baseUrl);
+		if (base) out[id] = { baseUrl: base };
 	}
 	return out;
 }
@@ -831,6 +871,9 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	}
 	if (r.customProvider !== null && typeof r.customProvider === "object" && !Array.isArray(r.customProvider)) {
 		out.customProvider = sanitizeCustomProvider(r.customProvider as Record<string, unknown>);
+	}
+	if (r.providers !== null && typeof r.providers === "object" && !Array.isArray(r.providers)) {
+		out.providers = sanitizeProviders(r.providers as Record<string, unknown>);
 	}
 	if (r.graph !== null && typeof r.graph === "object" && !Array.isArray(r.graph)) {
 		out.graph = sanitizeGraph(r.graph as Record<string, unknown>);
