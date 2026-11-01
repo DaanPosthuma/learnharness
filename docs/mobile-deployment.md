@@ -150,7 +150,7 @@ export AWS_PROFILE=… AWS_REGION=eu-west-2 ID=i-…
 aws ec2 stop-instances --instance-ids $ID && aws ec2 wait instance-stopped --instance-ids $ID
 aws ec2 modify-instance-attribute --instance-id $ID --instance-type '{"Value":"t3a.large"}'
 aws ec2 start-instances --instance-ids $ID && aws ec2 wait instance-running --instance-ids $ID
-deploy/aws-launch.sh run 'dnf install -y -q git; git clone -b mobile-pwa https://github.com/<you>/learnharness /opt/learnharness-src || (cd /opt/learnharness-src && git pull)'
+deploy/aws-launch.sh run 'dnf install -y -q git; git clone -b main https://github.com/<you>/learnharness /opt/learnharness-src || (cd /opt/learnharness-src && git pull)'
 deploy/aws-launch.sh run 'cd /opt/learnharness-src && docker build -t <account>.dkr.ecr.<region>.amazonaws.com/learnharness-web:latest . && cd /opt/learnharness && docker compose up -d'
 # then resize back the same way with {"Value":"t3a.small"}
 ```
