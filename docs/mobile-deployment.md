@@ -121,6 +121,17 @@ OIDC: the IAM role `learnharness-github-deploy` trusts only this repo's
 `main` branch and may only push to the one ECR repo and run the one SSM
 document on the one instance — no AWS keys live in GitHub. Docs-only
 pushes do not deploy; *Actions → Deploy web app → Run workflow* forces one.
+
+The repo is public, so its run logs are too. Where the deployment lives is
+therefore not in the workflow file: the AWS account id, the instance id and
+the hostname come from three repo secrets (`AWS_ACCOUNT_ID`, `INSTANCE_ID`,
+`SITE_HOST`) that `deploy/aws-github-oidc.sh` derives from the account and
+sets, and Actions masks wherever they appear in a log. The Docker build's
+summary, build-record artifact and provenance metadata are switched off
+because they carry the whole push event, committer e-mail included. What
+stays public: git history before 2026-11-02 (the values were in the file),
+and the author line of every commit — use GitHub's noreply address if that
+matters to you.
 By hand, from a machine that can build: `deploy/aws-launch.sh push` then
 `deploy/aws-launch.sh update`.
 

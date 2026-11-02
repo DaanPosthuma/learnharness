@@ -12,6 +12,13 @@ name: Deploy web app
 # live site reports the very build it just pushed. A red test suite never
 # reaches the box, and no time is lost waiting for it.
 #
+# This repo is public, so its run logs are too. Where the deployment lives
+# (AWS account id, instance id, hostname) is therefore not written here but
+# read from three repo secrets — not credentials, just values Actions masks
+# wherever they show up in a log line. deploy/aws-github-oidc.sh sets them.
+# The Docker build's summary, build-record artifact and provenance metadata
+# are off: they carry the whole push event, committer e-mail included.
+#
 # Fork-local: this workflow belongs to the DaanPosthuma fork's deployment
 # and is a no-op anywhere else.
 
@@ -34,11 +41,14 @@ concurrency:
 
 env:
   AWS_REGION: eu-west-2
-  AWS_ROLE: arn:aws:iam::489323024070:role/learnharness-github-deploy
-  ECR_IMAGE: 489323024070.dkr.ecr.eu-west-2.amazonaws.com/learnharness-web
-  INSTANCE_ID: i-00d4a1eab8468a1b5
-  SITE: https://3-11-119-60.sslip.io
+  AWS_ROLE: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/learnharness-github-deploy
+  ECR_IMAGE: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-west-2.amazonaws.com/learnharness-web
+  INSTANCE_ID: ${{ secrets.INSTANCE_ID }}
+  SITE: https://${{ secrets.SITE_HOST }}
   NEXT_TELEMETRY_DISABLED: "1"
+  DOCKER_BUILD_SUMMARY: "false"
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
+  BUILDX_METADATA_PROVENANCE: disabled
 
 jobs:
   quality:
@@ -65,6 +75,14 @@ jobs:
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
+      - name: Deployment secrets present
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          HOST: ${{ secrets.SITE_HOST }}
+        run: |
+          [ -n "$ACCOUNT" ] && [ -n "$INSTANCE_ID" ] && [ -n "$HOST" ] \
+            || { echo "::error::repo secrets AWS_ACCOUNT_ID, INSTANCE_ID and SITE_HOST are not all set; run deploy/aws-github-oidc.sh"; exit 1; }
+
       - uses: actions/checkout@v7
 
       - name: Assume the deploy role (OIDC)
@@ -72,6 +90,7 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
 
       - name: Log in to ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -102,11 +121,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Deployment secrets present
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          HOST: ${{ secrets.SITE_HOST }}
+        run: |
+          [ -n "$ACCOUNT" ] && [ -n "$INSTANCE_ID" ] && [ -n "$HOST" ] \
+            || { echo "::error::repo secrets AWS_ACCOUNT_ID, INSTANCE_ID and SITE_HOST are not all set; run deploy/aws-github-oidc.sh"; exit 1; }
+
       - name: Assume the deploy role (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
 
       - name: Log in to ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -152,7 +180,7 @@ jobs:
             sleep 5
           done
           [ "$(printf '%s' "${health:-}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null)" = "$GITHUB_SHA" ] \
-            || { echo "::error::$SITE does not report build $GITHUB_SHA (health: ${health:-none})"; exit 1; }
+            || { echo "::error::the site does not report build $GITHUB_SHA (health: ${health:-none})"; exit 1; }
           # The sign-in page and the installable assets are served to anyone.
           curl -fsS -m 10 -o /dev/null "$SITE/login"
           curl -fsS -m 10 -o /dev/null "$SITE/manifest.webmanifest"
@@ -160,6 +188,6 @@ jobs:
           {
             echo "### Deployed ${GITHUB_SHA::7}"
             echo
-            echo "- Image: \`$ECR_IMAGE@${{ needs.build.outputs.digest }}\`"
-            echo "- Site: $SITE (health reports build \`${GITHUB_SHA::7}\`)"
+            echo "- Image digest: \`${{ needs.build.outputs.digest }}\`"
+            echo "- The live site reports build \`${GITHUB_SHA::7}\`."
           } >> "$GITHUB_STEP_SUMMARY"
