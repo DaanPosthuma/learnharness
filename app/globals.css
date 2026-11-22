@@ -807,6 +807,18 @@ select {
 	}
 }
 
+/* Installed app whose page ends above the screen bottom (see
+   StandaloneScrollPin): the home indicator is outside the page, so the
+   bottom safe-area padding would only stack a second gap. */
+html.lh-short-viewport .lh-safe-bottom {
+	padding-bottom: 1.25rem;
+}
+html.lh-short-viewport .lh-safe-bottom-0,
+html.lh-short-viewport .lh-mobile-safe-bottom,
+html.lh-short-viewport aside.sidebar-motion > div {
+	padding-bottom: 0;
+}
+
 /* Shown only on touch devices (the counterpart of .lh-hide-touch). */
 .lh-touch-only {
 	display: none;

@@ -10,7 +10,7 @@
  * Everything here is a no-op when it is not registered.
  */
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 export const PWA_ENABLED = process.env.NODE_ENV === "production" || process.env.NEXT_PUBLIC_LH_PWA === "1";
 
@@ -124,7 +124,14 @@ export function OfflineBanner() {
  *  so the document itself never needs to scroll; CSS locks it (globals.css,
  *  display-mode: standalone) and this snaps any leftover page/visual-viewport
  *  offset back to 0. Never while a text field has focus: the keyboard
- *  legitimately pans the viewport to keep the caret visible. */
+ *  legitimately pans the viewport to keep the caret visible.
+ *
+ *  It also flags a SHORT viewport (<html class="lh-short-viewport">). Measured on
+ *  an iPhone (iOS 18.7, 2026-11-22): the installed app's page starts at the
+ *  screen top, under the status bar (safe-area-inset-top applies), but ends
+ *  47pt above the screen bottom (innerHeight 797 of 844), which the page can't
+ *  reach. The page bottom is then nowhere near the home indicator, so the
+ *  bottom safe-area padding only adds a second gap (globals.css drops it). */
 export function StandaloneScrollPin() {
 	useEffect(() => {
 		const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
@@ -137,6 +144,9 @@ export function StandaloneScrollPin() {
 		const pin = () => {
 			cancelAnimationFrame(frame);
 			frame = requestAnimationFrame(() => {
+				const portrait = innerHeight >= innerWidth;
+				const screenH = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+				document.documentElement.classList.toggle("lh-short-viewport", !typing() && screenH - innerHeight > 20);
 				if (typing()) return;
 				const vv = window.visualViewport;
 				if (window.scrollY !== 0 || window.scrollX !== 0 || (vv && (vv.offsetTop > 0.5 || vv.pageTop > 0.5))) window.scrollTo(0, 0);
@@ -168,66 +178,4 @@ export function StandaloneScrollPin() {
 		};
 	}, []);
 	return null;
-}
-
-// ------------------------------------------- TEMPORARY standalone viewport diag
-
-/** TEMPORARY (2026-11-22): the iOS home-screen layout still sits under the
- *  status bar; this prints the viewport numbers so a phone screenshot tells
- *  which iOS bug it is. Standalone only; tap to hide. Remove after. */
-export function StandaloneViewportDiag() {
-	const [lines, setLines] = useState<string[] | null>(null);
-	const [hidden, setHidden] = useState(false);
-	useEffect(() => {
-		const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
-		if (!standalone) return;
-		const probe = (css: string) => {
-			const d = document.createElement("div");
-			d.style.cssText = "position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;" + css;
-			document.body.appendChild(d);
-			const r = d.getBoundingClientRect();
-			const cs = getComputedStyle(d);
-			d.remove();
-			return { h: Math.round(r.height), pt: cs.paddingTop, pb: cs.paddingBottom };
-		};
-		const read = () => {
-			const vv = window.visualViewport;
-			const env = probe("padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);height:0");
-			const fixed = (() => {
-				const d = document.createElement("div");
-				d.style.cssText = "position:fixed;inset:0;visibility:hidden;pointer-events:none";
-				document.body.appendChild(d);
-				const r = d.getBoundingClientRect();
-				d.remove();
-				return `${Math.round(r.top)}..${Math.round(r.bottom)}`;
-			})();
-			const shell = document.querySelector(".h-dvh")?.getBoundingClientRect();
-			const bar = document.querySelector(".lh-top-bar, .lh-safe-top, .lh-safe-top-2")?.getBoundingClientRect();
-			setLines([
-				`screen ${screen.width}x${screen.height}  dpr ${devicePixelRatio}`,
-				`inner ${innerWidth}x${innerHeight}  docEl ${document.documentElement.clientHeight}`,
-				`vv h ${vv ? Math.round(vv.height) : "-"} offTop ${vv?.offsetTop ?? "-"} pageTop ${vv?.pageTop ?? "-"}`,
-				`scrollY ${scrollY}  fixed-inset0 ${fixed}`,
-				`safe top ${env.pt} bottom ${env.pb}`,
-				`vh ${probe("height:100vh").h} dvh ${probe("height:100dvh").h} svh ${probe("height:100svh").h} lvh ${probe("height:100lvh").h}`,
-				`shell ${shell ? `${Math.round(shell.top)}..${Math.round(shell.bottom)}` : "-"}  chrome ${bar ? `${Math.round(bar.top)}..${Math.round(bar.bottom)}` : "-"}`,
-				navigator.userAgent.replace(/^.*?\(([^)]*)\).*$/, "$1"),
-			]);
-		};
-		read();
-		const t = window.setTimeout(read, 1500);
-		window.addEventListener("resize", read);
-		return () => { window.clearTimeout(t); window.removeEventListener("resize", read); };
-	}, []);
-	if (!lines || hidden) return null;
-	return (
-		<button
-			type="button"
-			onClick={() => setHidden(true)}
-			className="fixed left-1/2 top-1/3 z-[90] -translate-x-1/2 rounded-md border border-border bg-card/95 px-3 py-2 text-left font-mono text-[11px] leading-snug text-foreground shadow-xl"
-		>
-			{lines.map((l, i) => <div key={i}>{l}</div>)}
-			<div className="mt-1 text-muted-foreground">viewport check, tap to hide</div>
-		</button>
-	);
 }

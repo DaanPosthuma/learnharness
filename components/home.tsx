@@ -330,7 +330,7 @@ export function Home({
 			{/* Floating host chrome stays outside page-content coverage, after
 			    the region at the same owned-surface rank. The drag mask remains
 			    first so later controls retain their Electron no-drag carve-outs. */}
-			<header style={chromeStyle} className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
+			<header style={chromeStyle} className="lh-safe-top pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
 				{/* `contents`: the toggle's own collapse margin (w-0 -mr-3 while
 				    the sidebar is open) must act in THIS row, so the next control
 				    sits the header's top gap from the left edge. */}
