@@ -19,7 +19,9 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # Dependencies move aside so the runtime stage can layer them separately:
 # an app-only change then re-ships ~100MB, not the whole ~1GB tree.
-RUN npm run build && npm prune --omit=dev --no-audit --no-fund && mv node_modules /deps
+# Core plugins (0.7.0+) bundle against their own locked deps: install them
+# first, as upstream's release workflow does.
+RUN npm run plugins:setup && npm run build && npm prune --omit=dev --no-audit --no-fund && mv node_modules /deps
 
 # -------------------------------------------------------------- runtime stage
 FROM node:22-bookworm-slim
