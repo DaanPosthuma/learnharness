@@ -4,10 +4,12 @@ import {
 	accumulateJobUsage,
 	buildSubagentSteer,
 	isSubagentFailure,
+	isWebSourceUrl,
 	piUsageToStep,
+	isBuiltinJobKind,
 	type DemoResult,
 	type DemoToolInput,
-	type JobKind,
+	type BuiltinJobKind,
 	type JobRecord,
 	type JobUsage,
 	type PdfResult,
@@ -30,6 +32,8 @@ import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
+import { loadLearnerImage, type LearnerImage } from "../tools/learner-image.ts";
+import { loadPdfFigureSource, type PdfFigureSource } from "../tools/pdf-figure.ts";
 
 /**
  * The background job runner (contracts.ts "THE ASYNC PROTOCOL" §2–3), created
@@ -118,7 +122,7 @@ interface LoopContext {
 
 /** The kind→role table (model slots wave, 2026-09-20): which ModelRole's
  * engine each sub-agent kind runs — the engineFor injection key. */
-const KIND_ROLE: Record<JobKind, ModelRole> = {
+const KIND_ROLE: Record<BuiltinJobKind, ModelRole> = {
 	research: "researcher",
 	demo: "demoBuilder",
 	visual: "visualMaker",
@@ -168,7 +172,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 *  tests swap scripted engines without touching deps), then the injected
 	 *  settings-resolved engineFor. undefined = the BYOK chain came up
 	 *  empty (owner, 2026-09-22) — runJob refuses below, honestly. */
-	function pickEngine(kind: JobKind): PiEngine | undefined {
+	function pickEngine(kind: BuiltinJobKind): PiEngine | undefined {
 		const testOverride: Record<string, { current?: PiEngine } | undefined> = {
 			researcher: researchModelOverride,
 			demoBuilder: demoModelOverride,
@@ -179,7 +183,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	}
 
 	const KIND_RUNNERS: Record<
-		JobKind,
+		BuiltinJobKind,
 		(jobId: string, engine: PiEngine, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
 	> = {
 		research: (jobId, engine, input, loop) => runResearchJob(jobId, engine, input, loop),
@@ -194,7 +198,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			console.error(`[job ${jobId}] not found — nothing to run`);
 			return;
 		}
-		if (job.status !== "running") return; // already finished / re-run after crash recovery
+		if (job.status !== "running" || !isBuiltinJobKind(job.kind)) return; // plugin tasks never enter the core runner
 		const run = KIND_RUNNERS[job.kind];
 		if (!run) {
 			console.error(`[job ${jobId}] unknown kind: ${job.kind}`);
@@ -454,19 +458,45 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 		const input = (passedInput ?? resolveInput(job, passedInput)) as VisualToolInput | undefined;
 		const brief = typeof input?.brief === "string" ? input.brief : "";
+		const imagePath = typeof input?.image === "string" ? input.image : undefined;
+		const pdfInput = input?.pdf && typeof input.pdf.path === "string" && typeof input.pdf.page === "number" ? input.pdf : undefined;
 
 		try {
-			jobStore.updateJob(jobId, { activity: "drawing figure" });
-			const result = await runVisualMaker(
-				{ brief },
-				{
-					engine: model,
-					abortSignal: loop.abortSignal,
-					chatId: loop.chatId,
-					onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
-					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
-				},
-			);
+			// Annotation (issue #363): the learner image is read once, here,
+			// and rides into the maker bounded for storage.
+			let image: LearnerImage | undefined;
+			if (imagePath !== undefined) {
+				jobStore.updateJob(jobId, { activity: "loading image" });
+				image = await loadLearnerImage(imagePath, loop.abortSignal);
+			}
+			// A PDF page: the maker crops the figure itself, so the stored
+			// image is whichever page or crop it finally annotated.
+			let pdf: PdfFigureSource | undefined;
+			let result: VisualResult;
+			let annotated: LearnerImage | undefined;
+			try {
+				if (pdfInput) {
+					jobStore.updateJob(jobId, { activity: `rendering page ${pdfInput.page}` });
+					pdf = await loadPdfFigureSource(pdfInput.path, pdfInput.page, loop.abortSignal);
+				}
+				jobStore.updateJob(jobId, { activity: pdf ? "finding figure" : image ? "annotating image" : "drawing figure" });
+				result = await runVisualMaker(
+					{ brief, image, pdf },
+					{
+						engine: model,
+						abortSignal: loop.abortSignal,
+						chatId: loop.chatId,
+						onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
+						onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
+					},
+				);
+				annotated = image ?? (result.image ? pdf?.imageFor(result.image.snapshotId) : undefined);
+			} finally {
+				// Release source PDF bytes before saving/delivering the artifact.
+				if (pdf) await pdf.close();
+			}
+			if (pdf) loop.abortSignal.throwIfAborted();
+			if (annotated && result.svg && stillRunning(jobId)) chatStore.saveImageSnapshot(job.chatId, annotated.snapshotId, annotated);
 			if (isVisualFailure(result) && stillRunning(jobId))
 				jobStore.updateJob(jobId, { error: result.notes ?? "visual build failed" });
 			await finishJob(jobId, result);
@@ -552,8 +582,10 @@ function hostOf(url: string | undefined): string {
 	}
 }
 
-/** Sources for the result: markdown links cited in the brief, else fetched URLs. */
-function parseSources(brief: string, fetchedUrls: string[]): ResearchResult["sources"] {
+/** Sources for the result: markdown links cited in the brief, else fetched
+ * URLs. Fetched URLs are recorded before the fetch tool validates their scheme;
+ * only http(s) sources may become links, including in previously saved jobs. */
+export function parseSources(brief: string, fetchedUrls: string[]): ResearchResult["sources"] {
 	const sources: ResearchResult["sources"] = [];
 	const seen = new Set<string>();
 	for (const match of brief.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
@@ -565,7 +597,7 @@ function parseSources(brief: string, fetchedUrls: string[]): ResearchResult["sou
 	}
 	if (sources.length === 0) {
 		for (const url of fetchedUrls) {
-			if (seen.has(url)) continue;
+			if (seen.has(url) || !isWebSourceUrl(url)) continue;
 			seen.add(url);
 			sources.push({ title: hostOf(url), url });
 		}
