@@ -434,6 +434,9 @@ async function main() {
 	});
 	try {
 		const page = await browser.newPage();
+		// Fork: the PWA service worker (public/sw.js) would fetch fonts itself,
+		// out of reach of this script's request interception. Bypass it.
+		await page.setBypassServiceWorker(true);
 		page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
 		page.on("pageerror", (e) => consoleErrors.push(e.message));
 		page.on("response", (r) => { if (r.status() >= 400) consoleErrors.push(`${r.status()} ${r.url()}`); });
