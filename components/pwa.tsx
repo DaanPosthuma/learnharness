@@ -114,3 +114,58 @@ export function OfflineBanner() {
 		</div>
 	);
 }
+
+// ------------------------------------------------------ standalone scroll pin
+
+/** iOS 26 home-screen apps (black-translucent status bar) can come up with
+ *  the whole page offset upwards by about the status-bar height: the top bar
+ *  sits under the clock, a strip shows below the composer, and a pull-down
+ *  only shows the top until it springs back. Every route is an h-dvh shell,
+ *  so the document itself never needs to scroll; CSS locks it (globals.css,
+ *  display-mode: standalone) and this snaps any leftover page/visual-viewport
+ *  offset back to 0. Never while a text field has focus: the keyboard
+ *  legitimately pans the viewport to keep the caret visible. */
+export function StandaloneScrollPin() {
+	useEffect(() => {
+		const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
+		if (!standalone) return;
+		const typing = () => {
+			const el = document.activeElement as HTMLElement | null;
+			return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+		};
+		let frame = 0;
+		const pin = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(() => {
+				if (typing()) return;
+				const vv = window.visualViewport;
+				if (window.scrollY !== 0 || window.scrollX !== 0 || (vv && (vv.offsetTop > 0.5 || vv.pageTop > 0.5))) window.scrollTo(0, 0);
+			});
+		};
+		pin();
+		const later = window.setTimeout(pin, 400);
+		const onVisible = () => { if (document.visibilityState === "visible") pin(); };
+		const vv = window.visualViewport;
+		window.addEventListener("scroll", pin, { passive: true });
+		window.addEventListener("resize", pin);
+		window.addEventListener("pageshow", pin);
+		window.addEventListener("orientationchange", pin);
+		document.addEventListener("visibilitychange", onVisible);
+		document.addEventListener("focusout", pin);
+		vv?.addEventListener("resize", pin);
+		vv?.addEventListener("scroll", pin);
+		return () => {
+			cancelAnimationFrame(frame);
+			window.clearTimeout(later);
+			window.removeEventListener("scroll", pin);
+			window.removeEventListener("resize", pin);
+			window.removeEventListener("pageshow", pin);
+			window.removeEventListener("orientationchange", pin);
+			document.removeEventListener("visibilitychange", onVisible);
+			document.removeEventListener("focusout", pin);
+			vv?.removeEventListener("resize", pin);
+			vv?.removeEventListener("scroll", pin);
+		};
+	}, []);
+	return null;
+}

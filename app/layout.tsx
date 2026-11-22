@@ -8,7 +8,7 @@ import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
 import UpdateBanner from "@/components/update-banner";
-import { OfflineBanner, PwaRegister } from "@/components/pwa";
+import { OfflineBanner, PwaRegister, StandaloneScrollPin } from "@/components/pwa";
 import { PluginsProvider } from "@/components/plugins";
 import { readThemeBoot } from "@/src/server";
 
@@ -72,6 +72,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 			<UpdateBanner />
 			{/* Offline support (mobile wave): service worker + the offline strip. */}
 			<PwaRegister />
+			<StandaloneScrollPin />
 			<OfflineBanner />
 		</body>
 		</html>

@@ -794,6 +794,19 @@ select {
 	padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Home-screen app: every route is an h-dvh shell, so the document never
+   scrolls. iOS 26 otherwise lets the whole page sit offset under the status
+   bar (top bar hidden behind the clock, a strip below the composer). See
+   StandaloneScrollPin in components/pwa.tsx. */
+@media (display-mode: standalone) {
+	html,
+	body {
+		height: 100%;
+		overflow: hidden;
+		overscroll-behavior: none;
+	}
+}
+
 /* Shown only on touch devices (the counterpart of .lh-hide-touch). */
 .lh-touch-only {
 	display: none;
