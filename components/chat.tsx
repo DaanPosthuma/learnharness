@@ -32,6 +32,8 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolPartRenderer } from "@/components/plugin-renderers";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
+import { collectQuestionHistory, type QuestionHistoryStep } from "@/components/question-history";
+import { QuestionHistoryEntry, QuestionHistoryReview } from "@/components/question-history-review";
 import { MalformedQuestion } from "@/components/malformed-question";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { ChatSessionComposer } from "@/components/composer";
@@ -311,6 +313,8 @@ export function Chat({
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
 	const { canonicalMessages, reconciliation, reconcile, pluginQuestionAvailability, pluginQuestionDraft, pluginProblemAvailability, pluginProblemDraft, dismissPluginQuestion, readRecord, readStats, messages, nativeMessages, hasConfirmedConversation, contextTokens, send, continueIfOwed, steer, steerQueue, offlineQueued, submitAnswer, dismissQuestion, dismissProblem, questionDraft, saveQuestionDraft, status, evaluating, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initialError, initiallyInFlight });
+	// Fork: the dock's history pager reads the answered questions so far.
+	const questionHistory = useMemo(() => collectQuestionHistory(messages), [messages]);
 
 	const controller = useOptionalInteractionLayers();
 	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
@@ -2049,6 +2053,7 @@ export function Chat({
 				    height morph (typing, a question growing the band, the
 				    fold) and NEVER overlaps the composer. */}
 				<DockOverlay
+					questionHistory={questionHistory}
 					viewReader={inputViewReader}
 					viewTargets={surfaceTarget ? { text: textTarget()!, answer: builtinTarget, thinking: thinkingTarget(), pluginQuestion: pluginQuestionTarget(), pluginProblem: pluginProblemTarget() } : undefined}
 					pending={pending}
@@ -2426,7 +2431,10 @@ export function DockOverlay({
 	dictationCancel,
 	setupCta,
 	queuedSteers,
+	questionHistory = [],
 }: {
+	/** Fork: answered questions so far, for the dock's history pager. */
+	questionHistory?: readonly QuestionHistoryStep[];
 	viewReader?: SessionInputViewReader;
 	viewTargets?: SessionViewTargets;
 	unavailableOccurrence?: import("@/src/core").PluginSubmissionOccurrence;
@@ -2517,6 +2525,16 @@ export function DockOverlay({
 	// learner reads the teaching first and opens the check when ready. Once
 	// revealed, the normal collapse machine rules apply untouched.
 	const [revealed, setRevealed] = useState(false);
+	// Question history review (fork, 2026-11-22): null = the live question;
+	// an index = that answered step is shown in the dock instead (the live
+	// form stays mounted, hidden). Reset on every new question and on fold
+	// (below), so review never outlives the moment it was opened for.
+	const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+	if (historyIndex !== null && (!expanded || historyIndex >= questionHistory.length)) setHistoryIndex(null);
+	// The review takes EXACTLY the open question's height (scrolling inside),
+	// so opening/paging/closing never resizes the dock: no reserve change, no
+	// transcript shift under the learner, nothing for the fold machine to read.
+	const [historyHeight, setHistoryHeight] = useState<number | null>(null);
 	const revealPending = requiresReveal && !revealed;
 
 	const pendingId = pluginQuestion ? pluginQuestionOccurrenceKey(pluginQuestion.occurrence) : unreadablePlugin ? "unreadable-plugin-question" : pending?.key ?? null;
@@ -2545,6 +2563,7 @@ export function DockOverlay({
 	if (pendingId !== prevPendingIdRef.current) {
 		const wasQuestion = prevPendingIdRef.current !== null;
 		prevPendingIdRef.current = pendingId;
+		setHistoryIndex(null);
 		if (pendingId && requiresReveal) {
 			const arrival = revealArrival(wasQuestion);
 			setExpanded(arrival.expanded);
@@ -2965,6 +2984,18 @@ export function DockOverlay({
 									{reconciliation === "ready" && <><p role="status" className="text-sm text-muted-foreground">Question unavailable</p><Button type="button" variant="ghost" disabled={!pluginReady} onClick={() => { void finishDictation().then(onPluginDismiss); }}>Dismiss question</Button></>}
 								</div>
 							) : pending ? (
+								<>
+								{expanded && historyIndex !== null && (
+									<QuestionHistoryReview steps={questionHistory} index={historyIndex} onIndex={setHistoryIndex} height={historyHeight} />
+								)}
+								{expanded && historyIndex === null && !revealPending && (
+									<QuestionHistoryEntry count={questionHistory.length} onOpen={() => {
+										setHistoryHeight(contentRef.current?.offsetHeight ?? null);
+										setHistoryIndex(questionHistory.length - 1);
+									}} />
+								)}
+								{/* Hidden, not unmounted, while reviewing: a half-made answer survives. */}
+								<div hidden={expanded && historyIndex !== null}>
 								<QuestionDock
 									viewReader={nativeViewReader}
 									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall"}
@@ -2987,6 +3018,8 @@ export function DockOverlay({
 									layoutRequest={layoutRequest}
 									onLayout={setQuestionLayout}
 								/>
+								</div>
+								</>
 							) : pluginPractice ? (
 								<PluginProblemDock {...pluginPractice} viewReader={customViewReader} expanded={expanded} onExpand={() => { setExpanded(true); void suppressFoldDuringReveal(); }} />
 							) : practice ? (

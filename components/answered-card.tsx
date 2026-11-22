@@ -40,10 +40,10 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
  * client — the card reveals his answer, the committed correct answer, and
  * the explanation, with NO verdict chips (owner ruling 2026-09-27).
  */
-export function AnsweredCard({ answer: savedAnswer, input, toolCallId }: { answer: QuestionAnswerData; input?: unknown; toolCallId?: string }) {
+export function AnsweredCard({ answer: savedAnswer, input, toolCallId, whyInitiallyOpen = false }: { answer: QuestionAnswerData; input?: unknown; toolCallId?: string; /** Fork: the dock's history review opens the explanation up front. */ whyInitiallyOpen?: boolean }) {
 	const answer = answerForPresentation(savedAnswer, input);
 	const optionLetters = answeredOptionLetters(savedAnswer, input);
-	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
+	const [whyOpen, setWhyOpen] = useState(whyInitiallyOpen); // the tucked explanation (predictions, owner 2026-10-03)
 
 	// ADAPT QUESTION LAYOUT on the record (owner, session-appearance-layout):
 	// an answered question gets two columns exactly when its question card
