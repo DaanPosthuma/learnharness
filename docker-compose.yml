@@ -15,6 +15,9 @@ services:
       LH_HOME: /var/lib/learnharness
       LH_IDLE_MINUTES: ${LH_IDLE_MINUTES:-60}
       LH_COOKIE_SECURE: ${LH_COOKIE_SECURE:-auto}
+      # 0.7.0+: the app refuses API calls (403) for host names other than
+      # localhost/IPs unless listed here; the public name is Caddy's.
+      LH_ALLOWED_HOSTS: ${LH_DOMAIN:-}
     volumes:
       - lh-data:/var/lib/learnharness
     expose:
